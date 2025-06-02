@@ -1,3 +1,6 @@
+[submodule "simd/libsimd"]
+	path = simd/libsimd
+	url = https://github.com/joshuadahlunr/libsimd
 [submodule "ffi/libffi"]
 	path = ffi/libffi
 	url = https://github.com/data-oriented-ir/libffi.git
