@@ -204,7 +204,7 @@ namespace mizu {
 
 		/**
 		 * Calculates where the program starts (or a estimate based on the current program counter if null)
-		 * 
+		 *
 		 * @param pc program counter to reference for fallback
 		 * @return const opcode* (estimated) program start
 		 */
@@ -213,7 +213,7 @@ namespace mizu {
 		}
 		/**
 		 * Calculates where the program ends (or a estimate based on the current program counter if null)
-		 * 
+		 *
 		 * @param pc program counter to reference for fallback
 		 * @return const opcode* (estimated) program end
 		 */
@@ -258,7 +258,7 @@ namespace mizu {
 	 * @param env The enviornment to copy data into
 	 * @param binary The binary data to fill the bottom of its stack with
 	 */
-	void fill_stack_bottom(registers_and_stack& env, fp::view<const std::byte> binary) {
+	inline void fill_stack_bottom(registers_and_stack& env, fp::view<const std::byte> binary) {
 		assert(binary.size() <= memory_size_bytes);
 		auto env_end = (std::byte*)(env.memory.data() + env.memory.size());
 		memcpy(env_end - binary.size(), binary.data(), binary.size());

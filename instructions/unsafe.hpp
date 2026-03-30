@@ -8,7 +8,7 @@ namespace mizu {
 
 		/**
 		 * Allocates new memory on the host application heap.
-		 * 
+		 *
 		 * @param out Register in which a pointer to the allocated memory will be stored
 		 * @param a Register storing how many bytes to allocate
 		 */
@@ -26,7 +26,7 @@ namespace mizu {
 
 		/**
 		 * Frees an allocation alloacted with \ref allocate.
-		 * 
+		 *
 		 * @param a Register storing the allocation to free
 		 * @param b Register storing a value to overwrite \p a with (defaults to zero)
 		 */
@@ -46,7 +46,7 @@ namespace mizu {
 
 		/**
 		 * Allocates new memory on the host application heap. This memory knows how many element are stored in it.
-		 * 
+		 *
 		 * @param out Register in which a pointer to the allocated memory will be stored
 		 * @param a Register storing the size of each element
 		 * @param b Register storing how many elements there are
@@ -57,7 +57,7 @@ namespace mizu {
 		{
 			size_t size = registers[pc->a];
 			size_t n = registers[pc->b];
-			auto dbg = registers[pc->out] = (size_t)__fp_malloc(size, n);
+			auto dbg = registers[pc->out] = (size_t)__fp_realloc(nullptr, size, n);
 			MIZU_NEXT();
 		}
 #else
@@ -67,7 +67,7 @@ namespace mizu {
 
 		/**
 		 * Frees an allocation alloacted with \ref allocate_fat_pointer.
-		 * 
+		 *
 		 * @param a Register storing the allocation to free
 		 * @param b Register storing a value to overwrite \p a with (defaults to zero)
 		 */
@@ -86,7 +86,7 @@ namespace mizu {
 
 		/**
 		 * Generates a pointer to memory on Mizu's stack.
-		 * 
+		 *
 		 * @param out Register to store the pointer in
 		 * @param a Register storing a (signed) offset from the current stack pointer.
 		 */
@@ -104,7 +104,7 @@ namespace mizu {
 
 		/**
 		 * Generates a pointer to memory on the bottom of Mizu's stack.
-		 * 
+		 *
 		 * @param out Register to store the pointer in
 		 * @param a Register storing a (signed) offset from the current stack pointer.
 		 */
@@ -122,7 +122,7 @@ namespace mizu {
 
 		/**
 		 * Generates a pointer to one of Mizu's registers
-		 * 
+		 *
 		 * @param a Register to take a pointer to.
 		 * @param out Register to store the pointer in
 		 */
@@ -139,7 +139,7 @@ namespace mizu {
 
 		/**
 		 * Copies memory from one pointer to another
-		 * 
+		 *
 		 * @param out Register storing a pointer that data should be copied to
 		 * @param a Register storing a pointer that data should be copied from
 		 * @param b Register storing how many bytes should be copied.
@@ -160,7 +160,7 @@ namespace mizu {
 
 		/**
 		 * Copies memory from one pointer to another
-		 * 
+		 *
 		 * @param out Register storing a pointer that data should be copied to
 		 * @param a Register storing a pointer that data should be copied from
 		 * @param b (branch immediate) number of bytes that should be copied
@@ -181,7 +181,7 @@ namespace mizu {
 
 		/**
 		 * Sets all of the given memory to the provided byte
-		 * 
+		 *
 		 * @param out Register storing a pointer to what should be overwritten
 		 * @param a Register storing a u8 to overwrite \p out with
 		 * @param b Register storing how many bytes should be overwritten
@@ -201,7 +201,7 @@ namespace mizu {
 
 		/**
 		 * Sets all of the given memory to the provided byte
-		 * 
+		 *
 		 * @param out Register storing a pointer to what should be overwritten
 		 * @param a Register storing a u8 to overwrite \p out with
 		 * @param b (branch immediate) how many bytes should be overwritten

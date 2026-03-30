@@ -110,7 +110,7 @@ namespace mizu {
 		void* debug_print(opcode* pc, uint64_t* registers, registers_and_stack* env, uint8_t* sp)
 #ifdef MIZU_IMPLEMENTATION
 		{
-			printf("u64 = %lu, i64 = %ld, f64 = %f, f32 = %f\n", registers[pc->a], (int64_t&)registers[pc->a], (double&)registers[pc->a], (float&)registers[pc->a]);
+			registers[pc->out] = printf("u64 = %lu, i64 = %ld, f64 = %f, f32 = %f\n", registers[pc->a], (int64_t&)registers[pc->a], (double&)registers[pc->a], (float&)registers[pc->a]);
 			fflush(stdout); // Make sure buffer is flushed!
 			MIZU_NEXT();
 		}
