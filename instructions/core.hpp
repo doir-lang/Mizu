@@ -54,7 +54,7 @@ namespace mizu {
 		 * @param out register to store the label pointer in
 		 * @param immediate the label to search for
 		 * @note Unlike every other assembly this is a runtime function, time is spent scanning the program to find the label.
-		 *	It is this recommended to cluster these instructions near the beginning of the program where they won't be executed multiple times.
+		 *	It is thys recommended to cluster these instructions near the beginning of the program where they won't be executed multiple times.
 		 * @note This function first searches below it in the program then searches above it if the label can't be found.
 		 *	The closest matching label following these rules will be found if there is any ambiguity.
 		 */
@@ -110,7 +110,7 @@ namespace mizu {
 		void* debug_print(opcode* pc, uint64_t* registers, registers_and_stack* env, uint8_t* sp)
 #ifdef MIZU_IMPLEMENTATION
 		{
-			printf("u64 = %lu, i64 = %ld, f64 = %f, f32 = %f\n", registers[pc->a], (int64_t&)registers[pc->a], (double&)registers[pc->a], (float&)registers[pc->a]);
+			registers[pc->out] = printf("u64 = %lu, i64 = %ld, f64 = %f, f32 = %f\n", registers[pc->a], (int64_t&)registers[pc->a], (double&)registers[pc->a], (float&)registers[pc->a]);
 			fflush(stdout); // Make sure buffer is flushed!
 			MIZU_NEXT();
 		}

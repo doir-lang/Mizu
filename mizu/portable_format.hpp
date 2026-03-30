@@ -84,14 +84,14 @@ namespace mizu { inline namespace portable {
 
 	/**
 	 * @brief Generates a C++ header file representing the provided Mizu \p program and \p env
-	 * 
+	 *
 	 * @param program The program to generate a header for.
 	 * @param env The enviornment the program should begin executing in.
 	 * @param extra_includes If the program requires extra instruction headers (like SIMD or custom) they should be listed (one per line, including the #include) here
 	 * @return fp::string a string storing the resulting headerfile.
 	 */
 	inline fp::string generate_header_file(fp::view<opcode> program, registers_and_stack& env, fp::string_view extra_includes = fp::string_view::from_cstr("")) {
-		fp::builder::string out;
+		fp::builder::string out{nullptr};
 		out << "#define MIZU_IMPLEMENTATION\n"
 			<< "#include <mizu/instructions.hpp>\n"
 			<< extra_includes
@@ -122,7 +122,7 @@ namespace mizu { inline namespace portable {
 			<< "\n"
 			<< "\tMIZU_START_FROM_ENVIRONMENT(program, environment);\n"
 			<< "}\n";
-			
+
 		return fp::string{out.release()};
 	}
 }}
