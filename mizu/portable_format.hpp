@@ -7,7 +7,7 @@
 
 namespace mizu { inline namespace portable {
 	/**
-	* Converts a Mizu \p program and some \p data into a portable program that can executed anywhere
+	* Converts a Mizu \p program and some \p data into a portable program that can be executed anywhere
 	* @note This function makes no account of different machine endianness or pointer sizes.
 	*
 	* @param program The program to serialize
@@ -59,7 +59,7 @@ namespace mizu { inline namespace portable {
 		fp::view<opcode> raw_program{(opcode*)binary.data(), 0};
 
 		// While there are opcodes left in the data...
-		while(binary.size() > sizeof(opcode)) {
+		while(binary.size() >= sizeof(opcode)) {
 			// Decode an opcode
 			auto op = (opcode*)binary.data();
 			// Push valid opcodes into the program
