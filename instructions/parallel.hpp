@@ -338,7 +338,7 @@ namespace mizu {
 		MIZU_REGISTER_INSTRUCTION(mutex_write_lock);
 
 		/**
-		 * Attemps to take an exclusive (writing) lock on the mutex
+		 * Attempts to take an exclusive (writing) lock on the mutex
 		 * 
 		 * @param out Register to store weather (1) or not (0) the lock was successfully taken in
 		 * @param a Register storing the mutex to lock.
@@ -414,7 +414,7 @@ namespace mizu {
 		MIZU_REGISTER_INSTRUCTION(mutex_read_lock);
 
 		/**
-		 * Attemps to take an shared (reading) lock on the mutex
+		 * Attempts to take an shared (reading) lock on the mutex
 		 * @note any number of threads can take a reading lock at the same time, but only one thread can have a writing lock.
 		 * 
 		 * @param out Register to store weather (1) or not (0) the lock was successfully taken in

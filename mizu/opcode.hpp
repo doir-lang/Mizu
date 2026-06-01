@@ -255,7 +255,7 @@ namespace mizu {
 	/**
 	 * Copies the provided \p binary data into the bottom of an environment's stack.
 	 *
-	 * @param env The enviornment to copy data into
+	 * @param env The environment to copy data into
 	 * @param binary The binary data to fill the bottom of its stack with
 	 */
 	inline void fill_stack_bottom(registers_and_stack& env, fp::view<const std::byte> binary) {
@@ -324,7 +324,7 @@ namespace mizu {
 
 		static void start(opcode* program_counter, registers_and_stack* environment) {
 			assert(program_counter && environment);
-			execution_context ctx{program_counter - 1, enviornment.memory, environment->stack_bottom, environment};
+			execution_context ctx{program_counter - 1, environment.memory, environment->stack_bottom, environment};
 			fpda_push_back(contexts, ctx);
 		}
 

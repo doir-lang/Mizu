@@ -41,7 +41,7 @@ namespace mizu { inline namespace portable {
 	* @note This function makes no account of different machine endianness or pointer sizes.
 	*
 	* @param program The program to snapshot
-	* @param env The program enviornment to snapshot
+	* @param env The program environment to snapshot
 	* @return fp::dynarray<std::byte> a dynamically allocated array of bytes representing the serialized program
 	*/
 	inline fp::dynarray<std::byte> to_portable(fp::view<const opcode> program, registers_and_stack& env) {
@@ -53,7 +53,7 @@ namespace mizu { inline namespace portable {
 	* @note This function makes no account of different machine endianness or pointer sizes.
 	*
 	* @param binary The binary blob to deserialize
-	* @return std::pair<fp::dynarray<opcode>, registers_and_stack> a dynamically allocated Mizu program and its enviornment
+	* @return std::pair<fp::dynarray<opcode>, registers_and_stack> a dynamically allocated Mizu program and its environment
 	*/
 	inline std::pair<fp::dynarray<opcode>, registers_and_stack> from_portable(fp::view<const std::byte> binary) {
 		fp::view<opcode> raw_program{(opcode*)binary.data(), 0};
@@ -74,7 +74,7 @@ namespace mizu { inline namespace portable {
 		// Deserialize the opcodes
 		auto program = from_binary(raw_program.byte_view());
 
-		// Create the enviornment
+		// Create the environment
 		registers_and_stack env = {};
 		if(binary.empty()) return {program, env};
 
@@ -86,7 +86,7 @@ namespace mizu { inline namespace portable {
 	 * @brief Generates a C++ header file representing the provided Mizu \p program and \p env
 	 *
 	 * @param program The program to generate a header for.
-	 * @param env The enviornment the program should begin executing in.
+	 * @param env The environment the program should begin executing in.
 	 * @param extra_includes If the program requires extra instruction headers (like SIMD or custom) they should be listed (one per line, including the #include) here
 	 * @return fp::string a string storing the resulting headerfile.
 	 */
