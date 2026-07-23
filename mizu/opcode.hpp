@@ -277,7 +277,7 @@ namespace mizu {
 	* @param program The program to execute
 	* @param env The environment to execute \p program in
 	*/
-	#define MIZU_START_FROM_ENVIRONMENT(program, env) const_cast<mizu::opcode*>(program)->op(const_cast<mizu::opcode*>(program), env.memory.data(), &env, env.stack_bottom)
+	#define MIZU_START_FROM_ENVIRONMENT(program, env) const_cast<::mizu::opcode*>(program)->op(const_cast<::mizu::opcode*>(program), env.memory.data(), &env, env.stack_bottom)
 #else // MIZU_NO_HARDWARE_THREADS
 	struct coroutine {
 		struct execution_context {
