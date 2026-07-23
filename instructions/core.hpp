@@ -74,11 +74,18 @@ namespace mizu {
 				}
 			// If we failed to find try searching till the beginning
 			if(registers[pc->out] == 0)
-				for(auto cur = pc; cur != program_start; --cur)
+				for(auto cur = pc;; --cur) {
 					if(cur->op == label && *(uint32_t*)&cur->a == needle) {
 						registers[pc->out] = (uint64_t)cur;
 						break;
 					}
+					// Tested after the body, so that program_start is itself
+					// examined rather than only stepped up to: a label emitted
+					// as a program's very first instruction would otherwise be
+					// unfindable, and the top of a loop is exactly where one
+					// tends to sit.
+					if(cur == program_start) break;
+				}
 			auto dbg = (opcode*)registers[pc->out];
 			MIZU_NEXT();
 		}

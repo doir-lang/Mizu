@@ -3,6 +3,8 @@
 #include <format>
 
 #include "serialize.hpp"
+
+#define FP_FORMAT_SUPPORT
 #include <fp/string.hpp>
 
 namespace mizu { inline namespace portable {
