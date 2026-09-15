@@ -1,0 +1,7 @@
+.cache
+.vscode
+bin
+*.a
+*.lib
+.dub
+dub.selections.json

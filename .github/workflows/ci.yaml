@@ -1,0 +1,95 @@
+name: Build and Test
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [D]
+  pull_request:
+    branches: [D]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # LDC only. DMD does not perform tail call optimization, and Mizu's
+      # dispatch depends on it — see "Tail calls" in the README.
+      - uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: ldc-latest
+
+      - name: Install libffi (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libffi-dev
+
+      - name: Install libffi (macOS)
+        if: runner.os == 'macOS'
+        run: brew install libffi
+
+      # vcpkg builds libffi from source, which is slow enough to be worth
+      # keeping. Its archives are content-addressed, so a stale entry is
+      # ignored rather than reused wrongly and the key needs no port version.
+      - name: Cache the vcpkg build of libffi
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-libffi-x64-windows-static-md
+
+      # Windows ships no libffi, so build one. The `-static-md` triplet links
+      # it statically against the *dynamic* CRT, which is what LDC builds
+      # -betterC executables against; plain `x64-windows` would instead leave a
+      # DLL to copy next to every test and example binary, and `x64-windows-
+      # static` would pull in a second, static CRT.
+      - name: Build libffi (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          vcpkg install libffi:x64-windows-static-md
+
+          # `"libs-windows": ["ffi"]` in dub.json asks the linker for ffi.lib,
+          # which is not necessarily what the port called its output, so stage a
+          # copy under that exact name. LIB is the last place both link.exe
+          # and LDC's bundled lld-link search, after the /LIBPATH: entries LDC
+          # passes for the MSVC toolchain itself, so adding to it cannot
+          # displace anything LDC needs.
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib"
+          $found = Get-ChildItem -Path $installed -Filter '*ffi*.lib' | Select-Object -First 1
+          if (-not $found) { throw "vcpkg installed no libffi library under $installed" }
+
+          $staging = "$env:GITHUB_WORKSPACE\.libffi"
+          New-Item -ItemType Directory -Force -Path $staging | Out-Null
+          Copy-Item $found.FullName "$staging\ffi.lib"
+          "LIB=$staging;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build the library
+        run: dub build --config=library --compiler=ldc2
+
+      - name: Run the tests
+        run: dub test --compiler=ldc2
+
+      # `dub test -c <config>` substitutes dub's own druntime-based unittest
+      # runner, which registers nothing under -betterC and then reports success
+      # having run no tests, so build this configuration and run it directly.
+      - name: Run the tests against the coroutine scheduler
+        run: |
+          dub build -c unittest-coroutine --build=unittest --compiler=ldc2
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ./bin/mizu-tests-coroutine.exe
+          else
+            ./bin/mizu-tests-coroutine
+          fi
+        shell: bash
+
+      - name: Run the examples
+        run: |
+          for example in fib bubble threads; do
+            dub run -c "example-$example" --compiler=ldc2
+          done
+        shell: bash

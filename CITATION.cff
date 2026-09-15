@@ -1,0 +1,15 @@
+cff-version: 1.2.0
+authors:
+- family-names: Joshua Dahl
+date-released: '2025-06-02'
+doi: 10.5281/zenodo.15578022
+identifiers:
+- type: swh
+  value: swh:1:dir:55ffb3395cce18ae2978962f4edd877472ce9e6b;origin=https://doi.org/10.5281/zenodo.15578021;visit=swh:1:snp:8e6972bc08d95088d629853ddb28a9495b04b64d;anchor=swh:1:rel:83bc0026eead25c38e64295cb21bd039b84d20b1;path=joshuadahlunr-MizuVM-171356f
+license:
+- mit
+message: If you use this software, please cite it using the metadata from this file.
+repository-code: https://github.com/joshuadahlunr/MizuVM/tree/paper
+title: 'joshuadahlunr/MizuVM: Paper1'
+type: software
+version: paper

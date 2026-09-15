@@ -1,0 +1,96 @@
+{
+	"name": "mizu",
+	"description": "A lightweight, easily extensible interpreter loosely modeled after RISC-V assembly, for -betterC D",
+	"license": "MIT",
+	"targetType": "staticLibrary",
+	"sourcePaths": ["source"],
+	"importPaths": ["source"],
+
+	"dependencies": {
+		"libfp": {
+			"repository": "git+https://github.com/doir-lang/libfp.git",
+			"version": "25fd5ddd49510b76830ebca7bf6b6df28795a4f0"
+		},
+		"bc-threads": {
+			"repository": "git+https://github.com/doir-lang/bc-threads.git",
+			"version": "053cbc5afa5ef2fbb95e3d7d5ba7da44ad85282f"
+		}
+	},
+
+	"dflags-ldc": ["-betterC", "-checkaction=C"],
+	"dflags-dmd": ["-betterC", "-checkaction=C"],
+
+	"libs-posix": ["ffi"],
+	"libs-linux": ["dl"],
+	"libs-windows": ["ffi"],
+
+	"buildTypes": {
+		"debug": { "buildOptions": ["debugMode", "debugInfo", "optimize"] },
+		"unittest": { "buildOptions": ["unittests", "debugMode", "debugInfo", "optimize"] }
+	},
+
+	"configurations": [
+		{
+			"name": "library",
+			"targetType": "staticLibrary"
+		},
+		{
+			"name": "unittest",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "mizu-tests",
+			"mainSourceFile": "tests/runner.d",
+			"sourcePaths": ["source", "tests"],
+			"importPaths": ["source", "tests"],
+			"lflags-posix": ["--export-dynamic"]
+		},
+		{
+			"name": "unittest-coroutine",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "mizu-tests-coroutine",
+			"mainSourceFile": "tests/runner.d",
+			"sourcePaths": ["source", "tests"],
+			"importPaths": ["source", "tests"],
+			"lflags-posix": ["--export-dynamic"],
+			"versions": ["MizuNoHardwareThreads"]
+		},
+		{
+			"name": "example-fib",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "fib",
+			"mainSourceFile": "examples/fib.d",
+			"sourcePaths": ["source"],
+			"importPaths": ["source"]
+		},
+		{
+			"name": "example-bubble",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "bubble",
+			"mainSourceFile": "examples/bubble.d",
+			"sourcePaths": ["source"],
+			"importPaths": ["source"]
+		},
+		{
+			"name": "example-triangle",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "triangle",
+			"mainSourceFile": "examples/triangle.d",
+			"sourcePaths": ["source"],
+			"importPaths": ["source"]
+		},
+		{
+			"name": "example-threads",
+			"targetType": "executable",
+			"targetPath": "bin",
+			"targetName": "threads",
+			"mainSourceFile": "examples/threads.d",
+			"sourcePaths": ["source"],
+			"importPaths": ["source"],
+			"lflags-posix": ["--export-dynamic"]
+		}
+	]
+}
