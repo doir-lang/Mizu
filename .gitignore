@@ -4,4 +4,6 @@ bin
 *.a
 *.lib
 .dub
+.vcpkg
+vcpkg_installed
 dub.selections.json

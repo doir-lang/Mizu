@@ -17,8 +17,15 @@ private void run(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
 	startFromEnvironment(program, env);
 }
 
+/*
+* `mizu.exception.fatal` ends the process, so the only way to watch a misuse
+* being caught from inside that process is to intercept the `SIGABRT` that
+* `abort` raises and jump back out of the handler. Both platforms do exactly
+* that and differ only in how a handler is installed and how the jump buffer
+* is spelled, so that is all each branch below defines; `aborts` is shared.
+*/
 version(Posix) {
-	import core.sys.posix.setjmp : sigjmp_buf;
+	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGABRT;
 
 	// druntime declares `sigjmp_buf` as a static array, which D passes by
 	// value rather than decaying to a pointer the way C does, so bind these
@@ -38,48 +45,139 @@ version(Posix) {
 
 	private extern(C) @nogc nothrow void siglongjmp(void* buffer, int value);
 
-	private __gshared sigjmp_buf abortEscape;
+	// druntime does not declare `sigjmp_buf` at all on Darwin, and where it
+	// does the layout is the C library's business rather than ours, so
+	// reserve a buffer large enough for every one of them instead: glibc's is
+	// the biggest at a little under 600 bytes on PowerPC, and macOS' is under
+	// 200. This is what the Windows branch below already does.
+	private __gshared align(16) ubyte[1024] abortEscape;
 
-	private extern(C) void onAbort(int) @nogc nothrow {
-		siglongjmp(abortEscape.ptr, 1);
-	}
+	/// What `installAbortHandler` has to give back to `restoreAbortHandler`.
+	private alias SavedAbortHandler = sigaction_t;
 
-	/**
-	* Runs `attempt` and reports whether it reached `mizu.exception.fatal`.
-	*
-	* `fatal` aborts the process, so the only way to watch a misuse being
-	* caught is to catch the `SIGABRT` and jump back out of the handler; the
-	* unit test in `mizu.exception` explains why that leaves the process
-	* unharmed. The abandoned VM frames do not leak, because Mizu's dispatch
-	* tail-calls and so only ever occupies the one frame.
-	*/
-	private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
-		import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGABRT;
-
-		sigaction_t action, previous;
+	private void installAbortHandler(out SavedAbortHandler saved) {
+		sigaction_t action;
 		sigemptyset(&action.sa_mask);
 		action.sa_handler = &onAbort;
-		sigaction(SIGABRT, &action, &previous);
+		sigaction(SIGABRT, &action, &saved);
+	}
 
-		__gshared bool aborted;
-		aborted = true;
-		if (sigsetjmpByPointer(abortEscape.ptr, 1) == 0) {
-			attempt();
-			aborted = false;
-		}
+	private void restoreAbortHandler(ref SavedAbortHandler saved) {
+		sigaction(SIGABRT, &saved, null);
+	}
+} else version(Windows) {
+	// The MS C runtime calls a `SIGABRT` handler as an ordinary function from
+	// inside `abort`, rather than through the operating system's signal
+	// machinery, so leaving it is an ordinary `longjmp` rather than a
+	// `siglongjmp`. `jmp_buf`'s layout is not ours to know -- it is 256 bytes
+	// on x86-64 and smaller elsewhere -- hence the generous reserve, and
+	// handing `_setjmp` a null frame is the documented way to ask for a plain
+	// register restore instead of an SEH unwind.
+	private __gshared align(16) ubyte[512] abortEscape;
 
-		sigaction(SIGABRT, &previous, null);
+	private extern(C) @nogc nothrow {
+		int _setjmp(void* buffer, void* frame);
+		void longjmp(void* buffer, int value);
+	}
 
-		// Jumping out of the handler abandons the VM part way through a
-		// program, so `startFromEnvironment` never reached its own cleanup.
-		// The coroutine scheduler's context list is global, and a leftover
-		// context points at the abandoned run's stack frame, which the next
-		// program would then be scheduled into.
-		static if (noHardwareThreads) Coroutine.clear();
+	// `core.stdc.signal` declares `signal` without `@nogc nothrow`, which this
+	// module is, so bind it here instead. `SIGABRT` is 22 on Windows.
+	private alias AbortHandler = extern(C) void function(int) @nogc nothrow;
+	private extern(C) @nogc nothrow AbortHandler signal(int sig, AbortHandler handler);
+	private enum int SIGABRT = 22;
 
-		return aborted;
+	/// Ditto
+	private alias SavedAbortHandler = AbortHandler;
+
+	private void installAbortHandler(out SavedAbortHandler saved) {
+		saved = signal(SIGABRT, &onAbort);
+	}
+
+	private void restoreAbortHandler(ref SavedAbortHandler saved) {
+		signal(SIGABRT, saved);
 	}
 }
+
+private extern(C) void onAbort(int) @nogc nothrow {
+	// Windows resets a handler to the default as it raises, so a test whose
+	// second `fatal` mattered would find nothing installed. Putting it back
+	// here rather than in `aborts` keeps one arming good for any number of
+	// aborts. POSIX `sigaction` does not reset, so this is a no-op there.
+	version(Windows) signal(SIGABRT, &onAbort);
+	version(Posix) siglongjmp(abortEscape.ptr, 1);
+	else version(Windows) longjmp(abortEscape.ptr, 1);
+}
+
+/**
+* Runs `attempt` and reports whether it reached `mizu.exception.fatal`.
+*
+* `fatal` aborts the process, so the only way to watch a misuse being caught
+* is to catch the `SIGABRT` and jump back out of the handler; the unit test in
+* `mizu.exception` explains why that leaves the process unharmed. The
+* abandoned VM frames do not leak, because Mizu's dispatch tail-calls and so
+* only ever occupies the one frame.
+*/
+private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
+	SavedAbortHandler saved;
+	installAbortHandler(saved);
+
+	// `setjmp` records the frame it was called from, so it has to be called
+	// from the frame being returned to: spelled out here rather than hidden
+	// behind a helper that would have returned before the jump arrived.
+	version(Posix) immutable landed = sigsetjmpByPointer(abortEscape.ptr, 1) != 0;
+	else version(Windows) immutable landed = _setjmp(abortEscape.ptr, null) != 0;
+
+	// `__gshared` because a local's value across a `longjmp` is whatever the
+	// optimiser left in its register.
+	__gshared bool aborted;
+	aborted = true;
+	if (!landed) {
+		attempt();
+		aborted = false;
+	}
+
+	restoreAbortHandler(saved);
+
+	// Jumping out of the handler abandons the VM part way through a
+	// program, so `startFromEnvironment` never reached its own cleanup.
+	// The coroutine scheduler's context list is global, and a leftover
+	// context points at the abandoned run's stack frame, which the next
+	// program would then be scheduled into.
+	static if (noHardwareThreads) Coroutine.clear();
+
+	return aborted;
+}
+
+/*
+* The host functions the FFI tests call back into.
+*
+* They are `export`ed because a Mizu program reaches the host through library
+* handle zero, which is "look in the executable itself": on Windows that is
+* `GetProcAddress` against the executable's export table, so a symbol has to
+* be named there to be found at all. On POSIX `--export-dynamic` (see the
+* `unittest` configuration in `dub.json`) publishes them the same way.
+*
+* Using Mizu's own symbols rather than the C library's is what makes these
+* tests platform independent: `strlen` and friends live in the process on
+* every platform, but only POSIX lets the executable hand them out again.
+*/
+export extern(C) {
+	/// A pointer in and a `u64` out.
+	ulong mizuTestLength(const(char)* text) @nogc nothrow {
+		import core.stdc.string : strlen;
+		return strlen(text);
+	}
+
+	/// An `i32` in and an `i32` out, for the signed 32 bit call path.
+	int mizuTestNegate(int value) @nogc nothrow { return -value; }
+
+	/// A pointer in and nothing out, for the call path that has no result.
+	/// It counts its calls, so a test can tell that it really ran.
+	void mizuTestDiscard(void*) @nogc nothrow { ++mizuTestDiscardCalls; }
+}
+
+/// How many times `mizuTestDiscard` has been called.
+private __gshared uint mizuTestDiscardCalls = 0;
 
 unittest {
 	// Arithmetic and immediates: t0 = 40, t1 = 2, t2 = t0 + t1, t3 = t0 / t1.
@@ -455,31 +553,29 @@ unittest {
 	run(program[], env);
 }
 
-version(Posix)
 unittest {
-	// A real foreign call: strlen("Hello 世界") through libffi.
+	// A real foreign call: `mizuTestLength("Hello 世界")` through libffi.
 	//
 	// Register zero is the library handle, which the loader reads as "look in
-	// everything already loaded", so libc's strlen is found without naming a
-	// library.
+	// the host executable", so the function is found without naming a library.
 	import mizu.ffi;
 
 	static immutable char[13] subject = "Hello 世界\0"; // 12 bytes plus terminator
-	static immutable char[7] symbol = "strlen\0";
+	static immutable char[16] symbol = "mizuTestLength\0\0";
 
 	Opcode[13] program = [
-		// Describe u64 strlen(void*).
+		// Describe u64 mizuTestLength(void*).
 		Opcode(&pushTypeU64),
 		Opcode(&pushTypePointer),
 		Opcode(&createInterface, 201),
-		// 202 = &strlen
+		// 202 = &mizuTestLength
 		Opcode(&loadImmediate, 203).setHostPointerLowerImmediate(symbol.ptr),
 		Opcode(&loadUpperImmediate, 203).setHostPointerUpperImmediate(symbol.ptr),
 		Opcode(&loadLibraryFunction, 202, 0, 203),
 		// a0 = &subject
 		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(subject.ptr),
 		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(subject.ptr),
-		// t0 = strlen(a0)
+		// t0 = mizuTestLength(a0)
 		Opcode(&callWithReturn, Registers.t(0), 202, 201),
 		Opcode(&freeInterface, 0, 201, 0),
 		Opcode(&halt),
@@ -491,18 +587,21 @@ unittest {
 	setupEnvironment(env, program[]);
 	startFromEnvironment(program[], env);
 
-	assert(env.memory[202] != 0);                  // Found strlen.
+	assert(env.memory[202] != 0);                  // Found the function.
 	assert(env.memory[Registers.t(0)] == 12);      // And it counted the bytes.
 	assert(env.memory[201] == 0);                  // freeInterface cleared it.
 }
 
-version(Posix)
 unittest {
-	// The FFI's void-returning call path, via libc's `abs` used for its value
-	// and then `free(null)` used for its lack of one.
+	// The FFI's void-returning call path. `mizuTestDiscard` ignores its
+	// argument and has no result, so the only evidence it ran is the counter
+	// it keeps -- which is the point: the call path being exercised is the one
+	// that hands libffi a null return slot.
 	import mizu.ffi;
 
-	static immutable char[5] symbol = "free\0";
+	static immutable char[18] symbol = "mizuTestDiscard\0\0\0";
+
+	immutable before = mizuTestDiscardCalls;
 
 	Opcode[9] program = [
 		Opcode(&pushTypeVoid),
@@ -511,7 +610,7 @@ unittest {
 		Opcode(&loadImmediate, 203).setHostPointerLowerImmediate(symbol.ptr),
 		Opcode(&loadUpperImmediate, 203).setHostPointerUpperImmediate(symbol.ptr),
 		Opcode(&loadLibraryFunction, 202, 0, 203),
-		// free(null) is defined to do nothing, so a0 stays zero.
+		// a0 is still zero, and the callee ignores it anyway.
 		Opcode(&call, 0, 202, 201),
 		Opcode(&freeInterface, 0, 201, 0),
 		Opcode(&halt),
@@ -521,8 +620,9 @@ unittest {
 	setupEnvironment(env, program[]);
 	startFromEnvironment(program[], env);
 
-	assert(env.memory[202] != 0); // Found free.
-	assert(env.memory[201] == 0); // freeInterface cleared it.
+	assert(env.memory[202] != 0);                       // Found the function.
+	assert(mizuTestDiscardCalls == before + 1);         // And it really ran.
+	assert(env.memory[201] == 0);                       // freeInterface cleared it.
 }
 
 unittest {
@@ -987,7 +1087,6 @@ unittest {
 	assert(env.memory[Registers.t(0)] == 0); // mutexFree cleared the handle
 }
 
-version(Posix)
 unittest {
 	// Every remaining `pushType*`, emptied again with `clearTypeStack` so the
 	// stack is left the way the other FFI tests expect to find it.
@@ -1009,12 +1108,11 @@ unittest {
 	run(program[], env);
 }
 
-version(Posix)
 unittest {
-	// A foreign call taking and returning `int32_t`: abs(-5).
+	// A foreign call taking and returning `int32_t`: mizuTestNegate(-5).
 	import mizu.ffi;
 
-	static immutable char[4] symbol = "abs\0";
+	static immutable char[16] symbol = "mizuTestNegate\0\0";
 
 	Opcode[10] program = [
 		Opcode(&pushTypeI32), // return type
@@ -1033,26 +1131,34 @@ unittest {
 	setupEnvironment(env, program[]);
 	startFromEnvironment(program[], env);
 
-	assert(env.memory[202] != 0);                        // Found abs.
-	assert(cast(int) env.memory[Registers.t(0)] == 5);   // And it took the modulus.
+	assert(env.memory[202] != 0);                        // Found the function.
+	assert(cast(int) env.memory[Registers.t(0)] == 5);   // And it changed the sign.
 	assert(env.memory[201] == 0);                        // freeInterface cleared it.
 }
 
-version(Posix)
 unittest {
 	// The two library-loading instructions: one name that cannot resolve, and
 	// a list in which the C library is found under whichever name fits.
+	//
+	// Every platform has a C library under one of these names, and neither
+	// spelling is a path, so this also exercises the loader's search rather
+	// than just opening a file.
 	import mizu.ffi;
 
-	static immutable char[10] libc = "libc.so.6\0";
-	static immutable char[18] system = "libSystem.B.dylib\0";
+	version(Windows) {
+		static immutable char[7] first = "msvcrt\0";
+		static immutable char[9] second = "ucrtbase\0";
+	} else {
+		static immutable char[10] first = "libc.so.6\0";
+		static immutable char[18] second = "libSystem.B.dylib\0";
+	}
 	static immutable char[32] missing = "mizu_definitely_not_a_library\0\0\0";
 
 	Opcode[10] program = [
-		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(libc.ptr),
-		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(libc.ptr),
-		Opcode(&loadImmediate, Registers.a(1)).setHostPointerLowerImmediate(system.ptr),
-		Opcode(&loadUpperImmediate, Registers.a(1)).setHostPointerUpperImmediate(system.ptr),
+		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(first.ptr),
+		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(first.ptr),
+		Opcode(&loadImmediate, Registers.a(1)).setHostPointerLowerImmediate(second.ptr),
+		Opcode(&loadUpperImmediate, Registers.a(1)).setHostPointerUpperImmediate(second.ptr),
 		Opcode(&loadFirstLibraryThatExists, Registers.t(0)).setImmediate(2),
 
 		Opcode(&loadImmediate, Registers.t(1)).setHostPointerLowerImmediate(missing.ptr),
@@ -1072,7 +1178,6 @@ unittest {
 	close(cast(Library*) env.memory[Registers.t(0)]);
 }
 
-version(Posix)
 unittest {
 	// An interface has to describe at least a return type, so building one
 	// from an empty type stack is fatal.
@@ -1088,7 +1193,6 @@ unittest {
 	assert(aborts({ run(program[], env); }));
 }
 
-version(Posix)
 unittest {
 	// A foreign call reads its arguments straight out of the argument
 	// registers into a fixed array of 128 pointers, so a signature wider than
@@ -1201,4 +1305,58 @@ unittest {
 	assert(env.memory[Registers.t(4)] == 1); // Once unlocked, a reader fits.
 	assert(env.memory[Registers.t(5)] == 0); // But a writer still does not.
 	assert(env.memory[Registers.t(0)] == 0); // mutexFree cleared the handle.
+}
+
+static if (noHardwareThreads)
+unittest {
+	// The blocking halves of the coroutine locks: `mutexWriteLock` and
+	// `mutexReadLock` finding the lock already held, rewinding and yielding.
+	//
+	// With the fallback there is no OS mutex — the register itself is the lock
+	// state — and forking copies the whole register file, so a second context
+	// cannot release what the first holds through the mutex instructions (see
+	// the note on `mutexCreate`). What it can do is write to the first
+	// context's register file directly: `pointerToRegister` takes the address
+	// of the lock register before the fork, so the worker inherits a pointer
+	// to the *main* context's copy and can clear it.
+	//
+	// Contexts alternate one instruction at a time, so the interleaving below
+	// is deterministic rather than a race. Reading down the two columns:
+	//
+	//   main 5 blocks [w] | wrk 13 clears | main 5 takes it | wrk 14 idles
+	//   main 6 blocks [r] | wrk 15 clears | main 6 takes it | wrk 16 halts
+	enum Reg lock = Registers.t(0), address = Registers.t(1);
+	enum Reg witness = Registers.t(2), worker = 220;
+	enum Opcode nop = Opcode(&add, 0, 0, 0); // Writes x0, which stays zero.
+
+	static immutable Opcode[17] program = [
+		/*  0 */ Opcode(&findLabel, 200).setImmediate(label2immediate("wrk")),
+		/*  1 */ Opcode(&pointerToRegister, address, lock),
+		/*  2 */ Opcode(&mutexCreate, lock),
+		/*  3 */ Opcode(&mutexWriteLock, 0, lock), // Uncontended: taken at once.
+		/*  4 */ Opcode(&forkTo, worker, 200),
+		// Both of these find the lock held and have to wait for the worker.
+		/*  5 */ Opcode(&mutexWriteLock, 0, lock),
+		/*  6 */ Opcode(&mutexReadLock, 0, lock),
+		/*  7 */ Opcode(&loadImmediate, witness).setImmediate(1),
+		/*  8 */ Opcode(&joinThread, 0, worker, 0),
+		/*  9 */ Opcode(&mutexReadUnlock, 0, lock),
+		/* 10 */ Opcode(&mutexFree, 0, lock, 0),
+		/* 11 */ Opcode(&halt),
+
+		// wrk: clear the main context's lock register, twice, spaced so that
+		// each clear lands while main is waiting rather than before it starts.
+		/* 12 */ Opcode(&label).setImmediate(label2immediate("wrk")),
+		/* 13 */ Opcode(&setMemoryImmediate, address, 0, 8),
+		/* 14 */ nop,
+		/* 15 */ Opcode(&setMemoryImmediate, address, 0, 8),
+		/* 16 */ Opcode(&halt),
+	];
+
+	RegistersAndStack env;
+	run(program[], env);
+
+	assert(env.memory[witness] == 1); // Both blocking locks eventually returned.
+	assert(env.memory[worker] == 0);  // joinThread cleared the handle.
+	assert(env.memory[lock] == 0);    // mutexFree cleared the lock register.
 }

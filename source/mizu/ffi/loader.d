@@ -148,8 +148,15 @@ void* lookup(scope const(char)* name, Library* library = null) @trusted {
 	static if (!dynamicLoadingSupported)
 		return fail("Dynamic loading is not supported on this platform.");
 	else version(Posix) {
+		// A null library means "search the whole process", which `dlsym`
+		// spells as `RTLD_DEFAULT`. glibc defines that as a null handle, so
+		// the argument passes straight through; macOS defines it as
+		// `(void*) -2` and rejects a genuinely null handle outright.
+		version(OSX) enum searchEverything = cast(Library*) -2;
+		else enum searchEverything = cast(Library*) null;
+
 		dlerror(); // Clear any stale error so ours is the only one we can see.
-		auto result = dlsym(library, name);
+		auto result = dlsym(library is null ? searchEverything : library, name);
 		if (auto error = dlerror()) return fail(error);
 		return result;
 	} else version(Windows) {
@@ -186,15 +193,38 @@ bool close(Library* library) @trusted {
 	}
 }
 
-version(Posix)
+version(unittest) {
+	/**
+	* A symbol for `loadCurrentExecutable`'s test to look up.
+	*
+	* Windows exposes only what an executable's export table names, so
+	* `loadCurrentExecutable` there can find nothing unless something is
+	* exported; POSIX publishes this alongside everything else through
+	* `--export-dynamic`, so one symbol serves both.
+	*/
+	export extern(C) void mizuLoaderTestSymbol() {}
+
+	/**
+	* Names the C library answers to, in the order worth trying.
+	*
+	* Every platform has one, and none of these is a real path, so a test
+	* using them exercises the loader's own search rather than just opening a
+	* file it was handed.
+	*/
+	version(Windows)
+		private immutable const(char)[][2] cRuntimeNames = ["msvcrt", "ucrtbase"];
+	else
+		private immutable const(char)[][3] cRuntimeNames =
+			["libc.so.6", "libSystem.B.dylib", "libc"];
+}
+
 unittest {
 	// The C library is present under at least one of these names everywhere
-	// this test runs, and none of them is a real path. Both spellings are
-	// tried unconditionally so the decorated path is exercised even on the
-	// platforms where the undecorated one already works.
-	static immutable const(char)[][3] candidates = ["libc.so.6", "libSystem.B.dylib", "libc"];
-	auto plain = loadFirstThatExists(candidates[], false);
-	auto decorated = loadFirstThatExists(candidates[], true);
+	// this test runs. Both spellings are tried unconditionally so the
+	// decorated path is exercised even on the platforms where the undecorated
+	// one already works.
+	auto plain = loadFirstThatExists(cRuntimeNames[], false);
+	auto decorated = loadFirstThatExists(cRuntimeNames[], true);
 	scope(exit) if (plain !is null) close(plain);
 	scope(exit) if (decorated !is null) close(decorated);
 
@@ -207,7 +237,6 @@ unittest {
 	assert(lastError !is null);
 }
 
-version(Posix)
 unittest {
 	// Every way of failing to load a library: a name that is not one, the
 	// same with the platform's extension appended, an empty path, and a list
@@ -226,12 +255,48 @@ unittest {
 	assert(lastError !is null);
 }
 
-version(Posix)
 unittest {
-	// The host executable loads by itself, and its own symbols are visible
-	// through it — which is what lets the FFI call into the host.
+	// The allocation for the library's path being refused. `loadShared` has
+	// to build a NUL terminated copy of `path` before it can hand it to the
+	// platform, and libfp's allocator is a plain global, so the failure can be
+	// staged rather than waited for.
+	import fp.pointer : allocFunction, AllocFunction;
+
+	static AllocFunction previous;
+	static void* refuse(void* p, size_t size) @nogc nothrow {
+		if (size == 0) return previous(p, 0); // Still let callers clean up.
+		return null;
+	}
+
+	previous = allocFunction;
+	allocFunction = &refuse;
+	auto library = loadShared("libc.so.6", false);
+	allocFunction = previous;
+
+	assert(library is null);
+	assert(lastError !is null);
+}
+
+version(Windows)
+unittest {
+	// `close` failing. `FreeLibrary` rejects a null module handle and says so,
+	// which is the only way to reach that branch without corrupting something
+	// real. POSIX has no equivalent: `dlclose` of a handle it never issued is
+	// undefined rather than an error, so this stays Windows only.
+	assert(!close(null));
+	assert(lastError !is null);
+}
+
+unittest {
+	// The host executable loads by itself, and its own exported symbols are
+	// visible through it — which is what lets the FFI call into the host.
 	auto self = loadCurrentExecutable();
 	assert(self !is null);
 	scope(exit) close(self);
-	assert(lookup("malloc", self) !is null);
+	assert(lookup("mizuLoaderTestSymbol", self) !is null);
+
+	// A null library means the same thing, reached by a different route on
+	// Windows (there is no `dlopen(null)`, so `lookup` loads the executable
+	// itself and releases it again).
+	assert(lookup("mizuLoaderTestSymbol", null) !is null);
 }

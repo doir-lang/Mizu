@@ -49,10 +49,12 @@ extern(C) int main() {
 
 ## Requirements
 
-* **LDC.** This is not a preference. See [Tail calls](#tail-calls) below.
+* **LDC.** This is not a preference, and building with DMD is a compile-time error. See
+  [Tail calls](#tail-calls) below.
 * **An optimizing build** (`-O1` or higher). Also not a preference.
 * **libffi**, unless you build with `-version=MizuNoFFI`. Any reasonably recent version works;
-  Mizu declares the handful of entry points it needs itself.
+  Mizu declares the handful of entry points it needs itself. Windows does not ship one; see
+  [libffi on Windows](#libffi-on-windows).
 
 ## How to integrate
 
@@ -92,10 +94,37 @@ dub run -c example-threads --compiler=ldc2    # forked thread + channel + FFI ca
 dub run -c example-triangle --compiler=ldc2   # a GLFW/OpenGL triangle, entirely over the FFI
 ```
 
-`--compiler=ldc2` is not a suggestion. DMD does not link the test suite at all — it emits calls to
-druntime helpers (`_memset128ii`, `core.bitop.byteswap`) that `-betterC` then refuses to link
-against — and even if it did, it performs no tail call optimization, so the dispatch described
-under [Tail calls](#tail-calls) would overflow the stack on the first loop of any size.
+`--compiler=ldc2` is not a suggestion, and [source/mizu/opcode.d](source/mizu/opcode.d) enforces
+it: under DMD it is a `static assert` rather than a build that fails later and less clearly. DMD
+does not link the test suite at all — it emits calls to druntime helpers (`_memset128ii`,
+`core.bitop.byteswap`) that `-betterC` then refuses to link against — and even if it did, it
+performs no tail call optimization, so the dispatch described under [Tail calls](#tail-calls)
+would overflow the stack on the first loop of any size. That applies to the coverage build too, so
+`DC=dmd tools/coverage.sh` reports the same error rather than dying partway through the run.
+`-version=MizuAllowDMD` lowers the error back to a warning, for tools that only analyse these
+sources — `dmd -o-` syntax checks, ddoc — and never run what they build.
+
+### libffi on Windows
+
+Linux and macOS have libffi in their package managers (`apt install libffi-dev`, `brew install
+libffi`). Windows has nothing to install, so build one with vcpkg before any of the commands
+above:
+
+```pwsh
+tools/vcpkg-libffi.ps1
+```
+
+The script installs what [vcpkg.json](vcpkg.json) asks for, using whichever vcpkg it can find
+(`VCPKG_ROOT`, `VCPKG_INSTALLATION_ROOT`, or one on `PATH`) and cloning one into `.vcpkg/vcpkg`
+if there is none. It then stages the result as `.vcpkg/lib/ffi.lib`, which is where
+`lflags-windows` in [dub.json](dub.json) and [tools/coverage.sh](tools/coverage.sh) point the
+linker. Run it again whenever you want a newer libffi; it is otherwise a one-time step, and
+everything it writes is git-ignored.
+
+libffi's x64 assembly goes through MASM, so this needs the same Visual Studio build tools LDC
+already links through. If you have a libffi from somewhere else, putting its `ffi.lib` on `LIB`
+works just as well: the staged directory is searched first and simply contributes nothing when
+it is empty.
 
 To run the same suite against the coroutine scheduler instead of OS threads, build and run that
 configuration directly:
@@ -191,6 +220,7 @@ Boolean knobs are D `version` identifiers, which `dub` can set for you:
 | `MizuEnableTracing` | Every instruction prints its name and operands as it runs. |
 | `MizuNoFFI` | Drop the FFI entirely, and with it the libffi dependency. |
 | `MizuNoLibFFI` | Keep the FFI instructions but bind no backend; the call instructions abort. |
+| `MizuAllowDMD` | Let DMD compile these sources, for tools that only analyse them. See [Building this repository](#building-this-repository). |
 
 D has no equivalent of `-DNAME=value`, so the two numeric knobs that used to be CMake cache
 variables are `enum`s in [source/mizu/config.d](source/mizu/config.d):

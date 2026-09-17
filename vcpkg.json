@@ -1,0 +1,9 @@
+{
+  "name": "mizu",
+  "version-string": "0.0.0",
+  "builtin-baseline": "f298fb4ef3a7ae09766b6a5beb92ce171a767927",
+  "description": "Build dependencies Windows does not ship. See tools/vcpkg-libffi.ps1.",
+  "dependencies": [
+    "libffi"
+  ]
+}

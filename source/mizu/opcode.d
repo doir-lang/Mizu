@@ -12,10 +12,28 @@ import fp.pointer : Array, ptrLength = length;
 import mizu.config;
 import mizu.exception : fatal;
 
-version(DigitalMars) pragma(msg,
-	"mizu: warning - DMD does not perform tail call optimization, so Mizu's "
-	~ "dispatch will overflow the stack at run time. Build with LDC "
-	~ "(--compiler=ldc2) and an optimization level of at least -O1.");
+// DMD cannot produce a working Mizu, so refuse here rather than leaving it to
+// surface as undefined druntime symbols at link time (`_memset128ii`,
+// `core.bitop.byteswap`, which `-betterC` will not link against) or as a stack
+// overflow the first time a program loops. `MizuAllowDMD` lowers this back to
+// the warning it used to be, for tools that only ever analyse these sources --
+// `dmd -o-` syntax checks, ddoc -- and never run what they build. Nothing in
+// this repository sets it: DMD cannot run the test suite or the coverage build
+// either, so both are better off with the error.
+version(DigitalMars) {
+	static if (allowDMD)
+		pragma(msg,
+			"mizu: warning - DMD does not perform tail call optimization, so "
+			~ "Mizu's dispatch will overflow the stack at run time.");
+	else
+		static assert(0,
+			"mizu: DMD cannot build Mizu. It performs no tail call "
+			~ "optimization, so the dispatch below overflows the stack on the "
+			~ "first loop of any size, and it emits druntime calls that "
+			~ "-betterC then refuses to link. Build with LDC "
+			~ "(--compiler=ldc2) at -O1 or higher. To analyse these sources "
+			~ "with DMD without running them, set -version=MizuAllowDMD.");
+}
 
 @nogc nothrow:
 

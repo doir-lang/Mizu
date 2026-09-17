@@ -19,7 +19,10 @@
 *   $(LI `MizuNoFFI` — drop the foreign function interface entirely.)
 *   $(LI `MizuNoLibFFI` — keep the FFI instructions but do not bind libffi;
 *        `create_interface`/`call` then abort. Implied when libffi is
-*        unavailable.))
+*        unavailable.)
+*   $(LI `MizuAllowDMD` — let DMD compile these sources. `mizu.opcode`
+*        otherwise refuses; see the `static assert` there. For tools that
+*        only analyse the sources, never for something meant to run.))
 */
 module mizu.config;
 
@@ -52,6 +55,11 @@ else enum bool noFFI = false;
 /// True when the FFI instructions are present but have no libffi behind them.
 version(MizuNoLibFFI) enum bool noLibFFI = true;
 else enum bool noLibFFI = isWasm;
+
+/// True when DMD is allowed to compile Mizu despite being unable to produce a
+/// working one. See the `static assert` in `mizu.opcode`.
+version(MizuAllowDMD) enum bool allowDMD = true;
+else enum bool allowDMD = false;
 
 /// True when the platform has a dynamic loader (`dlopen`/`LoadLibrary`).
 version(linux) enum bool dynamicLoadingSupported = true;

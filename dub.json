@@ -9,11 +9,11 @@
 	"dependencies": {
 		"libfp": {
 			"repository": "git+https://github.com/doir-lang/libfp.git",
-			"version": "25fd5ddd49510b76830ebca7bf6b6df28795a4f0"
+			"version": "674acd77c2b8411144c2e162015145df7edcf1a0"
 		},
 		"bc-threads": {
 			"repository": "git+https://github.com/doir-lang/bc-threads.git",
-			"version": "053cbc5afa5ef2fbb95e3d7d5ba7da44ad85282f"
+			"version": "f3e45474cb010bcdca84c30b60619b4c61249dc1"
 		}
 	},
 
@@ -23,6 +23,7 @@
 	"libs-posix": ["ffi"],
 	"libs-linux": ["dl"],
 	"libs-windows": ["ffi"],
+	"lflags-windows": ["/LIBPATH:$PACKAGE_DIR/.vcpkg/lib"],
 
 	"buildTypes": {
 		"debug": { "buildOptions": ["debugMode", "debugInfo", "optimize"] },
@@ -42,7 +43,9 @@
 			"mainSourceFile": "tests/runner.d",
 			"sourcePaths": ["source", "tests"],
 			"importPaths": ["source", "tests"],
-			"lflags-posix": ["--export-dynamic"]
+			"lflags-linux": ["--export-dynamic"],
+			"lflags-freebsd": ["--export-dynamic"],
+			"lflags-osx": ["-export_dynamic"]
 		},
 		{
 			"name": "unittest-coroutine",
@@ -52,7 +55,9 @@
 			"mainSourceFile": "tests/runner.d",
 			"sourcePaths": ["source", "tests"],
 			"importPaths": ["source", "tests"],
-			"lflags-posix": ["--export-dynamic"],
+			"lflags-linux": ["--export-dynamic"],
+			"lflags-freebsd": ["--export-dynamic"],
+			"lflags-osx": ["-export_dynamic"],
 			"versions": ["MizuNoHardwareThreads"]
 		},
 		{
@@ -90,7 +95,9 @@
 			"mainSourceFile": "examples/threads.d",
 			"sourcePaths": ["source"],
 			"importPaths": ["source"],
-			"lflags-posix": ["--export-dynamic"]
+			"lflags-linux": ["--export-dynamic"],
+			"lflags-freebsd": ["--export-dynamic"],
+			"lflags-osx": ["-export_dynamic"]
 		}
 	]
 }

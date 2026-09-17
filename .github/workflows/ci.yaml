@@ -33,40 +33,34 @@ jobs:
         run: brew install libffi
 
       # vcpkg builds libffi from source, which is slow enough to be worth
-      # keeping. Its archives are content-addressed, so a stale entry is
-      # ignored rather than reused wrongly and the key needs no port version.
+      # caching. Its archives are content-addressed, so a stale entry is
+      # ignored rather than reused wrongly. The run id in the key is there
+      # only so that every run writes an archive of its own and `restore-keys`
+      # picks up the newest; a fixed key is saved once and never updated.
+      #
+      # downloads/ is cached alongside it because libffi is an autotools port:
+      # vcpkg pulls down a private MSYS2 to run ./configure under, and those
+      # packages are pinned to versions that repo.msys2.org eventually deletes.
       - name: Cache the vcpkg build of libffi
         if: runner.os == 'Windows'
         uses: actions/cache@v4
         with:
-          path: ~/AppData/Local/vcpkg/archives
-          key: vcpkg-libffi-x64-windows-static-md
+          path: |
+            ${{ github.workspace }}/.vcpkg/cache
+            ${{ github.workspace }}/.vcpkg/downloads
+          key: vcpkg-libffi-${{ hashFiles('vcpkg.json') }}-${{ github.run_id }}
+          restore-keys: vcpkg-libffi-${{ hashFiles('vcpkg.json') }}-
 
-      # Windows ships no libffi, so build one. The `-static-md` triplet links
-      # it statically against the *dynamic* CRT, which is what LDC builds
-      # -betterC executables against; plain `x64-windows` would instead leave a
-      # DLL to copy next to every test and example binary, and `x64-windows-
-      # static` would pull in a second, static CRT.
+      # Windows ships no libffi, so build one. The script reads vcpkg.json,
+      # stages the result where dub.json's `lflags-windows` points the linker,
+      # and explains the choice of triplet.
       - name: Build libffi (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          vcpkg install libffi:x64-windows-static-md
-
-          # `"libs-windows": ["ffi"]` in dub.json asks the linker for ffi.lib,
-          # which is not necessarily what the port called its output, so stage a
-          # copy under that exact name. LIB is the last place both link.exe
-          # and LDC's bundled lld-link search, after the /LIBPATH: entries LDC
-          # passes for the MSVC toolchain itself, so adding to it cannot
-          # displace anything LDC needs.
-          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows-static-md\lib"
-          $found = Get-ChildItem -Path $installed -Filter '*ffi*.lib' | Select-Object -First 1
-          if (-not $found) { throw "vcpkg installed no libffi library under $installed" }
-
-          $staging = "$env:GITHUB_WORKSPACE\.libffi"
-          New-Item -ItemType Directory -Force -Path $staging | Out-Null
-          Copy-Item $found.FullName "$staging\ffi.lib"
-          "LIB=$staging;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+        env:
+          VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg/cache
+          VCPKG_DOWNLOADS: ${{ github.workspace }}/.vcpkg/downloads
+        run: ./tools/vcpkg-libffi.ps1
 
       - name: Build the library
         run: dub build --config=library --compiler=ldc2

@@ -99,9 +99,20 @@ ulong newThread(Opcode* pc, RegistersAndStack* env, ubyte* sp) @trusted {
 * so it records a deadline in `storageRegister` and rewinds `pc` until the
 * deadline passes.
 *
+* Note:
+*   Kept out of line deliberately. Every platform's clock reads through a
+*   pointer to a local (`timespec`, `LARGE_INTEGER`), and inlining those into
+*   `sleepMicroseconds` would give it a stack frame holding objects whose
+*   addresses escaped — from which the target refuses a tail call, so the
+*   dispatch at the end of the instruction would become an ordinary call. The
+*   coroutine fallback reaches that dispatch once per yield while it waits,
+*   which is a loop rather than a stack of frames only as long as the tail
+*   call survives.
+*
 * Returns: true once the delay has elapsed, false if it has not (the coroutine
 *          fallback before its deadline, or a sleep the platform refused).
 */
+pragma(inline, false)
 bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister) @trusted {
 	static if (!noHardwareThreads) {
 		version(Posix) {
@@ -143,10 +154,28 @@ bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister) @trust
 	}
 }
 
+// druntime binds neither `clock_gettime` nor `CLOCK_MONOTONIC` on macOS,
+// though libSystem has exported the function since 10.12 and `<time.h>`
+// spells the clock 6, so bind them rather than give the platform a worse
+// clock than it has. This has to sit at module scope: `extern(C)` on a
+// declaration nested inside a function body does not reach the mangling.
+version(OSX) {
+	import core.sys.posix.time : timespec;
+	private extern(C) @nogc nothrow int clock_gettime(int, timespec*);
+	private alias darwinClockGettime = clock_gettime;
+	private enum int darwinClockMonotonic = 6;
+}
+
 /// Microseconds from an arbitrary monotonic origin.
 private ulong monotonicMicroseconds() @trusted {
 	version(Posix) {
-		import core.sys.posix.time : clock_gettime, timespec, CLOCK_MONOTONIC;
+		version(OSX) {
+			import core.sys.posix.time : timespec;
+			alias CLOCK_MONOTONIC = darwinClockMonotonic;
+			alias clock_gettime = darwinClockGettime;
+		} else
+			import core.sys.posix.time : clock_gettime, timespec, CLOCK_MONOTONIC;
+
 		timespec now;
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		return cast(ulong) now.tv_sec * 1_000_000 + cast(ulong) now.tv_nsec / 1_000;
@@ -372,9 +401,11 @@ void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 void* mutexCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : mutexCreate_ = create;
-		auto mutex = fpMalloc!BcMutex(1);
+		// `create` heap-allocates and returns the mutex itself: a
+		// `pthread_rwlock_t` binds to the address it was initialised at, so
+		// boxing a returned-by-value one here would hand out a corrupt copy.
+		auto mutex = mutexCreate_();
 		if (mutex is null) fatal("Failed to allocate a mutex.");
-		*mutex = mutexCreate_();
 		registers[pc.out_] = cast(size_t) mutex;
 	} else
 		registers[pc.out_] = 0;
@@ -393,8 +424,7 @@ void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 		import bc.mutex : mutexFree_ = free;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		mutexFree_(*mutex);
-		fpFree(mutex);
+		mutexFree_(mutex);
 	}
 	registers[pc.a] = registers[pc.b];
 	mixin(mizuNext);
@@ -411,7 +441,7 @@ void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 		import bc.mutex : writeLock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		writeLock(*mutex);
+		writeLock(mutex);
 	} else {
 		if (registers[pc.a] != 0)
 			--pc; // Already locked: yield and try again.
@@ -432,7 +462,7 @@ void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 		import bc.mutex : tryWriteLock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		registers[pc.out_] = tryWriteLock(*mutex);
+		registers[pc.out_] = tryWriteLock(mutex);
 	} else {
 		if (registers[pc.a] == 0) {
 			registers[pc.a] = ulong.max;
@@ -453,7 +483,7 @@ void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 		import bc.mutex : writeUnlock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		writeUnlock(*mutex);
+		writeUnlock(mutex);
 	} else {
 		if (registers[pc.a] == ulong.max)
 			registers[pc.a] = 0;
@@ -475,7 +505,7 @@ void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 		import bc.mutex : readLock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		readLock(*mutex);
+		readLock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] < 0)
 			--pc; // Exclusively locked: yield and try again.
@@ -496,7 +526,7 @@ void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 		import bc.mutex : tryReadLock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		registers[pc.out_] = tryReadLock(*mutex);
+		registers[pc.out_] = tryReadLock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] >= 0) {
 			++registers[pc.a];
@@ -517,7 +547,7 @@ void* mutexReadUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 		import bc.mutex : readUnlock;
 		auto mutex = cast(BcMutex*) registers[pc.a];
 		if (mutex is null) fatal("Mutex does not exist.");
-		readUnlock(*mutex);
+		readUnlock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] > 0)
 			--registers[pc.a];
@@ -543,7 +573,12 @@ unittest {
 	// remainder rather than returning short. A repeating 2ms timer interrupts
 	// a 30ms delay about fifteen times over.
 	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGALRM;
-	import core.sys.posix.sys.time : itimerval, setitimer, ITIMER_REAL;
+	import core.sys.posix.sys.time : itimerval, setitimer;
+
+	// druntime does not define `ITIMER_REAL` on macOS; `<sys/time.h>` has it
+	// as 0, the same value every other platform uses.
+	version(OSX) enum ITIMER_REAL = 0;
+	else import core.sys.posix.sys.time : ITIMER_REAL;
 
 	static extern(C) void onAlarm(int) @nogc nothrow {}
 
