@@ -827,6 +827,24 @@ unittest {
 }
 
 unittest {
+	// The backward search used to stop *at* the start of the program rather
+	// than after examining it, so a label sitting on the very first
+	// instruction - where the top of a loop naturally goes - was unfindable,
+	// and `findLabel` reported the 0 that `jumpTo` then jumped to.
+	static immutable Opcode[4] program = [
+		/* 0 */ Opcode(&label).setImmediate(label2immediate("top")),
+		/* 1 */ Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("top")),
+		/* 2 */ Opcode(&loadImmediate, Registers.t(1)).setImmediate(7),
+		/* 3 */ Opcode(&halt),
+	];
+
+	RegistersAndStack env;
+	run(program[], env);
+	assert(env.memory[Registers.t(0)] == cast(ulong)&program[0]);
+	assert(env.memory[Registers.t(1)] == 7);
+}
+
+unittest {
 	// The debug instructions print to stdout and report how many characters
 	// they wrote, so a non-zero result means the register really was printed.
 	static immutable Opcode[4] program = [

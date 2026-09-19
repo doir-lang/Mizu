@@ -81,13 +81,19 @@ void* findLabel(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 			registers[pc.out_] = cast(ulong) cur;
 			break;
 		}
-	// Failing that, search back to the beginning.
+	// Failing that, search back to the beginning. The bound is tested after
+	// the body rather than before it, so that `programStart` is itself
+	// examined rather than only stepped up to: a label emitted as a program's
+	// very first instruction would otherwise be unfindable, and the top of a
+	// loop is exactly where one tends to sit.
 	if (registers[pc.out_] == 0)
-		for (auto cur = pc; cur !is programStart; --cur)
+		for (auto cur = pc;; --cur) {
 			if (cur.op is &label && cur.immediate == needle) {
 				registers[pc.out_] = cast(ulong) cur;
 				break;
 			}
+			if (cur is programStart) break;
+		}
 	mixin(mizuNext);
 }
 

@@ -16,6 +16,20 @@
 * a given build instead of depending on static initialization order across
 * translation units.
 *
+* $(H3 Names)
+*
+* Unlike the C++ original, which registered each instruction under its bare
+* identifier, the table stores fully qualified names:
+* `mizu.instructions.core.add`, not `add`. Two packages may then both declare
+* an `add` without one shadowing the other, and a name is enough on its own
+* to say where the instruction came from — which is what lets
+* `mizu.portable_format.generateSourceFile` emit a file that imports exactly
+* the modules the program needs. It is also what `__FUNCTION__` expands to,
+* so a table name and the name a traced instruction prints under
+* `MizuEnableTracing` are now the same string. `lookupId` still accepts a
+* bare name for convenience; see `unqualifiedName` and `moduleOfName` to take
+* a stored name apart.
+*
 * $(H3 Adding your own instructions)
 *
 * The table is a template, `Lookup`, so a project that defines instructions
@@ -75,7 +89,12 @@ enum Id notFound = Id.max;
 
 /// One row of the lookup table.
 struct Entry {
-	/// The instruction's D identifier, null terminated so `.ptr` is printable.
+	/**
+	* The instruction's fully qualified D name — `mizu.instructions.core.add`,
+	* not `add` — null terminated so `.ptr` is printable.
+	*
+	* See_Also: `unqualifiedName`, `moduleOfName`
+	*/
 	string name;
 	/// The instruction itself; null for `programEnd`.
 	Instruction ptr;
@@ -197,10 +216,12 @@ template Lookup(Extra...) {
 	private Entry[entryCount] buildTable() {
 		Entry[entryCount] result;
 		size_t i = 0;
-		result[i++] = Entry("programEnd", null);
+		result[i++] = Entry(__traits(fullyQualifiedName, mizu.instructions.core.programEnd), null);
 		static foreach (mod; allModules)
 			static foreach (name; instructionsOf!mod)
-				result[i++] = Entry(name, &__traits(getMember, mod, name));
+				result[i++] = Entry(
+					__traits(fullyQualifiedName, __traits(getMember, mod, name)),
+					&__traits(getMember, mod, name));
 		return result;
 	}
 
@@ -216,12 +237,20 @@ template Lookup(Extra...) {
 	/**
 	* Finds an instruction's ID by name.
 	*
+	* `name` may be fully qualified (`mizu.instructions.core.add`) or bare
+	* (`add`); a bare name matches the first row whose own final component
+	* matches, so qualify it when two packages declare the same instruction.
+	*
 	* Returns: the ID, or `notFound`.
 	*/
 	Id lookupId(scope const(char)[] name) {
 		foreach (id; 0 .. entryCount)
 			if (sameName(table[id].name, name))
 				return id;
+		if (moduleOfName(name).length == 0)
+			foreach (id; 0 .. entryCount)
+				if (sameName(unqualifiedName(table[id].name), name))
+					return id;
 		return notFound;
 	}
 
@@ -297,33 +326,67 @@ alias lookupName = defaultLookup.lookupName;
 /// Ditto `Lookup.lookup`
 alias lookup = defaultLookup.lookup;
 
-private bool sameName(scope const(char)[] a, scope const(char)[] b) @trusted {
+/// True if `a` and `b` are the same sequence of characters.
+bool sameName(scope const(char)[] a, scope const(char)[] b) @trusted {
 	if (a.length != b.length) return false;
 	if (a.length == 0) return true;
 	return memcmp(a.ptr, b.ptr, a.length) == 0;
+}
+
+/**
+* The instruction half of a fully qualified `name`: everything after the last
+* dot, or all of `name` if it has none.
+*/
+const(char)[] unqualifiedName(return scope const(char)[] name) {
+	foreach_reverse (i, c; name)
+		if (c == '.') return name[i + 1 .. $];
+	return name;
+}
+
+/**
+* The module half of a fully qualified `name`: everything before the last
+* dot, or an empty slice if it has none.
+*/
+const(char)[] moduleOfName(return scope const(char)[] name) {
+	foreach_reverse (i, c; name)
+		if (c == '.') return name[0 .. i];
+	return name[0 .. 0];
 }
 
 unittest {
 	// programEnd owns slot zero, so a null op round-trips through serialization.
 	assert(lookupId(cast(Instruction) null) == 0);
 	assert(lookupPointer(0) is null);
-	assert(sameName(lookupName(0), "programEnd"));
+	assert(sameName(lookupName(0), "mizu.instructions.core.programEnd"));
 
 	// Every core instruction is present, findable both ways, and agrees with itself.
-	immutable id = lookupId("loadImmediate");
+	immutable id = lookupId("mizu.instructions.core.loadImmediate");
 	assert(id != notFound);
 	assert(lookupPointer(id) is &loadImmediate);
 	assert(lookupId(&loadImmediate) == id);
-	assert(sameName(lookup(&loadImmediate), "loadImmediate"));
-	assert(lookup("loadImmediate") is &loadImmediate);
+	assert(sameName(lookup(&loadImmediate), "mizu.instructions.core.loadImmediate"));
+	assert(lookup("mizu.instructions.core.loadImmediate") is &loadImmediate);
 
-	// Instructions from every module made it in.
+	// A bare name still finds it, and a wrongly qualified one does not.
+	assert(lookupId("loadImmediate") == id);
+	assert(lookup("loadImmediate") is &loadImmediate);
+	assert(lookupId("mizu.instructions.f32.loadImmediate") == notFound);
+
+	// Instructions from every module made it in, under their own module's name.
 	assert(lookupId("add") != notFound);
 	assert(lookupId("breakpoint") != notFound);
 	assert(lookupId("addF32") != notFound);
 	assert(lookupId("addF64") != notFound);
 	assert(lookupId("copyMemory") != notFound);
 	assert(lookupId("channelCreate") != notFound);
+	assert(sameName(lookupName(lookupId("add")), "mizu.instructions.core.add"));
+	assert(sameName(lookupName(lookupId("breakpoint")), "mizu.instructions.dbg.breakpoint"));
+	assert(sameName(lookupName(lookupId("addF32")), "mizu.instructions.f32.addF32"));
+	assert(sameName(lookupName(lookupId("addF64")), "mizu.instructions.f64.addF64"));
+	assert(sameName(lookupName(lookupId("copyMemory")), "mizu.instructions.unsafe.copyMemory"));
+	assert(sameName(lookupName(lookupId("channelCreate")), "mizu.instructions.parallel.channelCreate"));
+	static if (!noFFI)
+		assert(sameName(lookupName(lookupId("createInterface")), "mizu.ffi.instructions.createInterface"));
 
 	// Helpers that are not instructions stayed out.
 	assert(lookupId("floatRegister") == notFound);
@@ -381,14 +444,37 @@ unittest {
 		assert(extended.lookupPointer(i) is lookupPointer(i));
 	}
 
-	immutable id = extended.lookupId("testExtraInstruction");
+	immutable id = extended.lookupId("mizu.lookup.testExtraInstruction");
 	assert(id != notFound);
+	assert(extended.lookupId("testExtraInstruction") == id);
+	assert(sameName(extended.lookupName(id), "mizu.lookup.testExtraInstruction"));
 	assert(id >= extended.builtinCount);
 	assert(extended.isExtendedId(id));
 	assert(extended.lookupPointer(id) is cast(Instruction) &testExtraInstruction);
 	assert(extended.lookupId(cast(Instruction) &testExtraInstruction) == id);
 
 	// The unextended table knows nothing about it.
+	assert(lookupId("mizu.lookup.testExtraInstruction") == notFound);
 	assert(lookupId("testExtraInstruction") == notFound);
 	assert(lookupId(cast(Instruction) &testExtraInstruction) == notFound);
+}
+
+unittest {
+	// Every stored name is qualified by the module that declares the
+	// instruction, and is still a null terminated literal, so `Entry.name`'s
+	// promise that `.ptr` is printable survives being built by a trait.
+	foreach (i; 0 .. instructionCount) {
+		auto name = table[i].name;
+		assert(moduleOfName(name).length > 0);
+		assert(unqualifiedName(name).length > 0);
+		assert(name.ptr[name.length] == '\0');
+	}
+
+	// Taking a name apart, and the degenerate cases.
+	assert(sameName(moduleOfName("mizu.instructions.core.add"), "mizu.instructions.core"));
+	assert(sameName(unqualifiedName("mizu.instructions.core.add"), "add"));
+	assert(moduleOfName("add").length == 0);
+	assert(sameName(unqualifiedName("add"), "add"));
+	assert(moduleOfName("").length == 0);
+	assert(unqualifiedName("").length == 0);
 }

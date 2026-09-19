@@ -11,6 +11,11 @@
 *   `SerializationOpcode.sizeof` throughout, so the stride matches the data
 *   actually in the stream and a blob written by a 64 bit host really does
 *   load on a 32 bit one.
+*
+*   `generateSourceFile` also names instructions in full —
+*   `mizu.instructions.core.add` rather than `add` — where the C++ original
+*   emitted bare names into a header that had already included everything.
+*   See `mizu.lookup`.
 */
 module mizu.portable_format;
 
@@ -127,15 +132,25 @@ PortableProgram fromPortable(alias L = defaultLookup)(const(void)[] binary) @tru
 * The C++ original emitted a C++ header; this emits D, since that is what a
 * D port can actually compile.
 *
+* Because `mizu.lookup` stores fully qualified instruction names, the
+* generated file names every instruction by its module and imports exactly
+* the modules the program draws on — whether they are Mizu's own or an
+* extension's. Nothing has to be told where an instruction lives; anything
+* else the file needs can still go in `extraImports`.
+*
 * Params:
 *   L = the lookup that names the instructions; pass your own
 *     `mizu.lookup.Lookup` instantiation for a program that uses
-*     instructions of your own, and name their modules in `extraImports` so
-*     the generated file can see them
+*     instructions of your own
 *   program = the program to generate source for
 *   env = the environment the program should begin executing in
 *   extraImports = extra `import` lines (one per line, including the `import`
-*     keyword) for programs that need instruction modules beyond the defaults
+*     keyword and the semicolon), written after the ones derived from the
+*     instruction names. The instruction modules are no longer among the
+*     things that have to be named here; this is for whatever else a
+*     particular build needs — a package that has to be imported for its
+*     `static this`, say, or a module the extra instructions expect to have
+*     been linked in.
 * Returns:
 *   A libfp string; free it with `fp.string.free`.
 */
@@ -149,20 +164,41 @@ char* generateSourceFile(alias L = defaultLookup)(const(Opcode)[] program, ref R
 		put(scratch[0 .. n]);
 	}
 
-	put("import mizu;\n");
+	// Which instructions the program uses, so the file can import their
+	// modules and nothing else.
+	bool[L.entryCount] used;
+	foreach (ref code; program) {
+		immutable id = L.lookupId(code.op);
+		assert(L.validId(id), "Program contains an instruction the lookup does not know.");
+		used[id] = true;
+	}
+
+	put("import mizu;\n"); // The VM itself: `Opcode`, `setupEnvironment`, and so on.
+	// A module's instructions are contiguous in the table, so remembering the
+	// last one emitted is enough to import each module once.
+	const(char)[] lastModule;
+	foreach (id; 0 .. L.entryCount) {
+		if (!used[id]) continue;
+		auto mod = moduleOfName(L.lookupName(id));
+		if (mod.length == 0 || sameName(mod, lastModule)) continue;
+		put("import ");
+		put(mod);
+		put(";\n");
+		lastModule = mod;
+	}
 	if (extraImports.length) put(extraImports);
+
 	put("\nstatic immutable mizu.Opcode[");
 	putUnsigned(program.length);
 	put("] program = [\n");
 
 	foreach (ref code; program) {
 		immutable id = L.lookupId(code.op);
-		auto name = L.lookupName(id);
-		assert(name.length, "Program contains an instruction the lookup does not know.");
-		// Mizu's own instructions are reachable through the `mizu` package;
-		// an extension's are whatever `extraImports` brought into scope.
-		put(L.isExtendedId(id) ? "\tmizu.Opcode(&" : "\tmizu.Opcode(&mizu.");
-		put(name);
+		put("\tmizu.Opcode(");
+		// Every instruction is named in full; `programEnd` is a null constant
+		// rather than a function, so it is the one row without an `&`.
+		if (id != 0) put("&");
+		put(L.lookupName(id));
 		put(", ");
 		putUnsigned(code.out_);
 		put(", ");
@@ -266,11 +302,58 @@ unittest {
 	import fp.string : stringLength = length, sliceOf = slice;
 	auto text = sliceOf(source);
 	assert(text.length > 0);
-	// The generated file mentions both instructions by name and the register value.
-	assert(findSlices(text, "loadImmediate", 0) != size_t.max);
-	assert(findSlices(text, "&mizu.halt", 0) != size_t.max);
+	// Both instructions are named in full, under the module that declares
+	// them, and that module is imported. The register value is there too.
+	assert(findSlices(text, "import mizu;\n", 0) != size_t.max);
+	assert(findSlices(text, "import mizu.instructions.core;\n", 0) != size_t.max);
+	assert(findSlices(text, "&mizu.instructions.core.loadImmediate", 0) != size_t.max);
+	assert(findSlices(text, "&mizu.instructions.core.halt", 0) != size_t.max);
 	assert(findSlices(text, "0xABC", 0) != size_t.max);
 	assert(findSlices(text, "extern(C) int main()", 0) != size_t.max);
+
+	// Only the modules the program actually draws on are imported.
+	assert(findSlices(text, "import mizu.instructions.f32;", 0) == size_t.max);
+	assert(findSlices(text, "import mizu.ffi.instructions;", 0) == size_t.max);
+}
+
+version (unittest) private extern(C) void* testPortableInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+	return null;
+}
+
+unittest {
+	// An instruction from another package needs no help from the caller: the
+	// lookup knows the module it lives in, so the generated file imports it.
+	import mizu.instructions.core;
+	import fp.string : stringFree = free, findSlices, sliceOf = slice;
+
+	alias extended = Lookup!(mizu.portable_format);
+
+	static immutable Opcode[3] program = [
+		Opcode(&loadImmediate, registers.t(0)).setImmediate(1),
+		Opcode(&testPortableInstruction, registers.t(1), registers.t(0)),
+		Opcode(null), // A programEnd terminator, the one row that is not a function.
+	];
+
+	RegistersAndStack env;
+	setupEnvironment(env, program[]);
+
+	// Whatever the caller adds is written after the derived imports.
+	auto source = generateSourceFile!extended(program[], env, "import core.stdc.stdio;\n");
+	scope(exit) stringFree(source);
+	auto text = sliceOf(source);
+
+	immutable derived = findSlices(text, "import mizu.portable_format;\n", 0);
+	immutable extra = findSlices(text, "import core.stdc.stdio;\n", 0);
+	assert(extra != size_t.max);
+	assert(derived < extra);
+	assert(extra < findSlices(text, "static immutable mizu.Opcode[", 0));
+
+	assert(findSlices(text, "import mizu.portable_format;\n", 0) != size_t.max);
+	assert(findSlices(text, "&mizu.portable_format.testPortableInstruction", 0) != size_t.max);
+	assert(findSlices(text, "import mizu.instructions.core;\n", 0) != size_t.max);
+	assert(findSlices(text, "mizu.Opcode(mizu.instructions.core.programEnd, 0, 0, 0)", 0) != size_t.max);
+	// ... and `programEnd` is named rather than having its address taken.
+	assert(findSlices(text, "&mizu.instructions.core.programEnd", 0) == size_t.max);
 }
 
 unittest {

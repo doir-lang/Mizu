@@ -103,7 +103,10 @@ alias myLookup = Lookup!(myproject.instructions);
 
 `myLookup` has the same members as `mizu.lookup` itself — `table`, `lookupId`, `lookupName`,
 `lookupPointer`, `lookup` — with Mizu's IDs unchanged and yours starting at
-`myLookup.builtinCount`. Pass it to the serializers so they resolve both halves:
+`myLookup.builtinCount`. Names are stored fully qualified, so yours is
+`myproject.instructions.myInstruction` and nothing collides with Mizu's own; `lookupId` still
+takes a bare `myInstruction` when there is no ambiguity to worry about. Pass the table to the
+serializers so they resolve both halves:
 
 ```d
 auto bytes = toPortable!myLookup(program, environment);
@@ -320,6 +323,14 @@ looks inside. As a side effect the port owns the argument-type array outright, i
 recovering it from `cif->arg_types - 1` to free it.
 
 **`generate_header_file` generates D**, naturally, and is called `generateSourceFile`.
+
+**Instruction names are fully qualified.** The C++ registered each instruction under its bare
+identifier, which was enough for a generated header that had already `#include`d everything.
+`mizu.lookup` stores `mizu.instructions.core.add` instead, so two packages may each declare an
+`add`, and a name says on its own where the instruction came from. `generateSourceFile` uses
+that to write a file that names every instruction in full and imports exactly the modules the
+program draws on — including a downstream package's — so the generated file compiles with no
+help from the caller.
 
 **`unsafe.allocateFatPointer` records a byte count**, not an element count. The C++ reached
 libfp's internal `__fp_realloc(p, size, n)`; libfp's D API only takes the element size as a
