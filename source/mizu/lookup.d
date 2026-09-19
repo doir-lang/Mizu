@@ -16,12 +16,39 @@
 * a given build instead of depending on static initialization order across
 * translation units.
 *
+* $(H3 Adding your own instructions)
+*
+* The table is a template, `Lookup`, so a project that defines instructions
+* of its own can build a table that knows about them too:
+*
+* ---
+* module myproject.instructions;
+* extern(C) void* myInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) { ... }
+*
+* alias myLookup = Lookup!(myproject.instructions);
+* ---
+*
+* `myLookup` has the same members as this module's, with your instructions
+* appended after Mizu's, so Mizu's own IDs are untouched and yours start at
+* `myLookup.builtinCount`. Hand it to the serializers to make them resolve
+* both halves — `fromBinary!myLookup(blob)`, `toPortable!myLookup(program)`
+* and so on; every function in `mizu.serialize` and `mizu.portable_format`
+* takes a lookup as its first template argument and defaults to `Lookup!()`.
+*
+* This has to be a template rather than, say, a list of extra modules
+* `mizu.lookup` imports: Mizu is usually compiled as its own static library,
+* long before your instructions exist. A template is instantiated in *your*
+* compilation instead, where the compiler can see both halves, and the
+* resulting table is still built entirely at compile time.
+*
 * Warning:
 *   IDs still describe one build configuration. Adding, removing or
 *   reordering instructions renumbers everything after the change, so a
 *   serialized program can only be loaded by a build with the same
-*   instruction set. FFI instructions are placed last so that turning the
-*   FFI on or off leaves the core instruction IDs untouched.
+*   instruction set. FFI instructions are placed last of Mizu's own so that
+*   turning the FFI on or off leaves the core instruction IDs untouched;
+*   extra instructions follow them, so a program that uses extras must be
+*   loaded by a build that agrees about the FFI as well.
 */
 module mizu.lookup;
 
@@ -58,18 +85,30 @@ struct Entry {
 private template AliasSeq(Args...) { alias AliasSeq = Args; }
 
 /**
-* Every module whose instructions belong in the table, in ID order.
+* Every module of Mizu's own whose instructions belong in the table, in ID
+* order.
 *
 * The FFI comes last deliberately: see the warning in the module docs.
 */
-private alias instructionModules = AliasSeq!(
-	mizu.instructions.core,
-	mizu.instructions.dbg,
-	mizu.instructions.f32,
-	mizu.instructions.f64,
-	mizu.instructions.unsafe,
-	mizu.instructions.parallel,
-);
+static if (!noFFI)
+	private alias builtinModules = AliasSeq!(
+		mizu.instructions.core,
+		mizu.instructions.dbg,
+		mizu.instructions.f32,
+		mizu.instructions.f64,
+		mizu.instructions.unsafe,
+		mizu.instructions.parallel,
+		mizu.ffi.instructions,
+	);
+else
+	private alias builtinModules = AliasSeq!(
+		mizu.instructions.core,
+		mizu.instructions.dbg,
+		mizu.instructions.f32,
+		mizu.instructions.f64,
+		mizu.instructions.unsafe,
+		mizu.instructions.parallel,
+	);
 
 /// True if `mod`.`name` is an instruction `mod` itself declares.
 private template isInstruction(alias mod, string name) {
@@ -123,105 +162,145 @@ private template instructionsOf(alias mod) {
 	alias instructionsOf = expand!0;
 }
 
-private enum size_t entryCount = () {
-	size_t total = 1; // Slot zero is programEnd.
-	static foreach (mod; instructionModules)
-		total += instructionsOf!mod.length;
-	static if (!noFFI)
-		total += instructionsOf!(mizu.ffi.instructions).length;
-	return total;
-}();
-
-private Entry[entryCount] buildTable() {
-	Entry[entryCount] result;
-	size_t i = 0;
-	result[i++] = Entry("programEnd", null);
-	static foreach (mod; instructionModules)
-		static foreach (name; instructionsOf!mod)
-			result[i++] = Entry(name, &__traits(getMember, mod, name));
-	static if (!noFFI)
-		static foreach (name; instructionsOf!(mizu.ffi.instructions))
-			result[i++] = Entry(name, &__traits(getMember, mizu.ffi.instructions, name));
-	return result;
+/// How many instructions `Mods` declare between them.
+private template totalInstructions(Mods...) {
+	private enum size_t count = () {
+		size_t total = 0;
+		static foreach (mod; Mods)
+			total += instructionsOf!mod.length;
+		return total;
+	}();
+	alias totalInstructions = count;
 }
 
-/// Every known instruction, indexed by ID. Built at compile time.
-immutable Entry[entryCount] table = buildTable();
+/**
+* A lookup table over Mizu's instructions, plus the ones declared by the
+* `Extra` modules.
+*
+* `Lookup!()` is the table this module's own `table`, `lookupId` and friends
+* are aliases for; instantiate it with your instruction modules to extend it.
+* See the module documentation.
+*/
+template Lookup(Extra...) {
+	static foreach (mod; Extra)
+		static assert(__traits(isModule, mod),
+			"Lookup's arguments are the modules your instructions are declared in.");
 
+	private alias allModules = AliasSeq!(builtinModules, Extra);
+
+	/// How many instructions the lookup knows about (including `programEnd`).
+	enum size_t entryCount = 1 + totalInstructions!allModules; // Slot zero is programEnd.
+
+	/// How many of those are Mizu's own. `Extra`'s IDs start here.
+	enum size_t builtinCount = 1 + totalInstructions!builtinModules;
+
+	private Entry[entryCount] buildTable() {
+		Entry[entryCount] result;
+		size_t i = 0;
+		result[i++] = Entry("programEnd", null);
+		static foreach (mod; allModules)
+			static foreach (name; instructionsOf!mod)
+				result[i++] = Entry(name, &__traits(getMember, mod, name));
+		return result;
+	}
+
+	/// Every known instruction, indexed by ID. Built at compile time.
+	immutable Entry[entryCount] table = buildTable();
+
+	/// True if `id` names a row of `table`.
+	bool validId(Id id) { return id < entryCount; }
+
+	/// True if `id` names an instruction one of the `Extra` modules declares.
+	bool isExtendedId(Id id) { return id >= builtinCount && id < entryCount; }
+
+	/**
+	* Finds an instruction's ID by name.
+	*
+	* Returns: the ID, or `notFound`.
+	*/
+	Id lookupId(scope const(char)[] name) {
+		foreach (id; 0 .. entryCount)
+			if (sameName(table[id].name, name))
+				return id;
+		return notFound;
+	}
+
+	/**
+	* Finds an instruction's ID by function pointer.
+	*
+	* Returns: the ID, or `notFound`. A null pointer is `programEnd`, ID zero.
+	*/
+	Id lookupId(Instruction ptr) {
+		foreach (id; 0 .. entryCount)
+			if (table[id].ptr is ptr)
+				return id;
+		return notFound;
+	}
+
+	/**
+	* Looks up an instruction's function pointer by ID.
+	*
+	* Returns:
+	*   The instruction, or null. Note that null is also the legitimate answer
+	*   for ID zero (`programEnd`); use `validId` to tell the two apart.
+	*/
+	Instruction lookupPointer(Id id) {
+		if (!validId(id)) return null;
+		return table[id].ptr;
+	}
+
+	/**
+	* Looks up an instruction's name by ID.
+	*
+	* Returns: the name, or a null slice if `id` is out of range.
+	*/
+	string lookupName(Id id) {
+		if (!validId(id)) return null;
+		return table[id].name;
+	}
+
+	/**
+	* Finds an instruction's function pointer by name.
+	*
+	* Returns: the instruction, or null if the name is unknown.
+	*/
+	Instruction lookup(scope const(char)[] name) {
+		return lookupPointer(lookupId(name));
+	}
+
+	/**
+	* Finds an instruction's name by function pointer.
+	*
+	* Returns: the name, or a null slice if the pointer is unknown.
+	*/
+	string lookup(Instruction ptr) {
+		return lookupName(lookupId(ptr));
+	}
+}
+
+/// The lookup over Mizu's own instructions, which is what the names below
+/// refer to. Extended tables are `Lookup!(yourModule)`; see the module docs.
+alias defaultLookup = Lookup!();
+
+/// Ditto `Lookup.table`
+alias table = defaultLookup.table;
 /// How many instructions the lookup knows about (including `programEnd`).
-enum size_t instructionCount = entryCount;
-
-/// True if `id` names a row of `table`.
-bool validId(Id id) { return id < entryCount; }
+enum size_t instructionCount = defaultLookup.entryCount;
+/// Ditto `Lookup.validId`
+alias validId = defaultLookup.validId;
+/// Ditto `Lookup.lookupId`
+alias lookupId = defaultLookup.lookupId;
+/// Ditto `Lookup.lookupPointer`
+alias lookupPointer = defaultLookup.lookupPointer;
+/// Ditto `Lookup.lookupName`
+alias lookupName = defaultLookup.lookupName;
+/// Ditto `Lookup.lookup`
+alias lookup = defaultLookup.lookup;
 
 private bool sameName(scope const(char)[] a, scope const(char)[] b) @trusted {
 	if (a.length != b.length) return false;
 	if (a.length == 0) return true;
 	return memcmp(a.ptr, b.ptr, a.length) == 0;
-}
-
-/**
-* Finds an instruction's ID by name.
-*
-* Returns: the ID, or `notFound`.
-*/
-Id lookupId(scope const(char)[] name) {
-	foreach (id; 0 .. entryCount)
-		if (sameName(table[id].name, name))
-			return id;
-	return notFound;
-}
-
-/**
-* Finds an instruction's ID by function pointer.
-*
-* Returns: the ID, or `notFound`. A null pointer is `programEnd`, ID zero.
-*/
-Id lookupId(Instruction ptr) {
-	foreach (id; 0 .. entryCount)
-		if (table[id].ptr is ptr)
-			return id;
-	return notFound;
-}
-
-/**
-* Looks up an instruction's function pointer by ID.
-*
-* Returns:
-*   The instruction, or null. Note that null is also the legitimate answer
-*   for ID zero (`programEnd`); use `validId` to tell the two apart.
-*/
-Instruction lookupPointer(Id id) {
-	if (!validId(id)) return null;
-	return table[id].ptr;
-}
-
-/**
-* Looks up an instruction's name by ID.
-*
-* Returns: the name, or a null slice if `id` is out of range.
-*/
-string lookupName(Id id) {
-	if (!validId(id)) return null;
-	return table[id].name;
-}
-
-/**
-* Finds an instruction's function pointer by name.
-*
-* Returns: the instruction, or null if the name is unknown.
-*/
-Instruction lookup(scope const(char)[] name) {
-	return lookupPointer(lookupId(name));
-}
-
-/**
-* Finds an instruction's name by function pointer.
-*
-* Returns: the name, or a null slice if the pointer is unknown.
-*/
-string lookup(Instruction ptr) {
-	return lookupName(lookupId(ptr));
 }
 
 unittest {
@@ -252,6 +331,11 @@ unittest {
 	assert(lookupId("newThread") == notFound);
 	assert(lookupId("nosuchinstruction") == notFound);
 
+	// Nothing of Mizu's own is an extended ID, and the two counts agree.
+	assert(defaultLookup.builtinCount == instructionCount);
+	foreach (i; 0 .. instructionCount)
+		assert(!defaultLookup.isExtendedId(i));
+
 	// No duplicate names or pointers.
 	foreach (i; 0 .. instructionCount)
 		foreach (j; i + 1 .. instructionCount) {
@@ -275,9 +359,36 @@ unittest {
 	assert(lookupPointer(notFound) is null);
 
 	// And the immutable table really is what `buildTable` builds.
-	auto rebuilt = buildTable();
+	auto rebuilt = defaultLookup.buildTable();
 	foreach (i; 0 .. instructionCount) {
 		assert(sameName(rebuilt[i].name, table[i].name));
 		assert(rebuilt[i].ptr is table[i].ptr);
 	}
+}
+
+version (unittest) private extern(C) void* testExtraInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+	return null;
+}
+
+unittest {
+	// An extended table: Mizu's own IDs are untouched, and the extras follow.
+	alias extended = Lookup!(mizu.lookup);
+
+	assert(extended.builtinCount == instructionCount);
+	assert(extended.entryCount > instructionCount);
+	foreach (i; 0 .. instructionCount) {
+		assert(sameName(extended.lookupName(i), lookupName(i)));
+		assert(extended.lookupPointer(i) is lookupPointer(i));
+	}
+
+	immutable id = extended.lookupId("testExtraInstruction");
+	assert(id != notFound);
+	assert(id >= extended.builtinCount);
+	assert(extended.isExtendedId(id));
+	assert(extended.lookupPointer(id) is cast(Instruction) &testExtraInstruction);
+	assert(extended.lookupId(cast(Instruction) &testExtraInstruction) == id);
+
+	// The unextended table knows nothing about it.
+	assert(lookupId("testExtraInstruction") == notFound);
+	assert(lookupId(cast(Instruction) &testExtraInstruction) == notFound);
 }

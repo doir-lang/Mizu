@@ -40,15 +40,18 @@ struct PortableProgram {
 * be executed anywhere.
 *
 * Params:
+*   L = the lookup that assigns the instruction IDs; pass your own
+*     `mizu.lookup.Lookup` instantiation for a program that uses
+*     instructions of your own
 *   program = the program to serialize
 *   data = bytes to place at the bottom of the program's stack
 * Returns:
 *   A libfp dynarray of bytes; free it with `fp.dynarray.free`.
 */
-ubyte* toPortable(const(Opcode)[] program, const(void)[] data = null) @trusted {
+ubyte* toPortable(alias L = defaultLookup)(const(Opcode)[] program, const(void)[] data = null) @trusted {
 	assert(data.length <= memorySizeBytes);
 
-	auto result = toBinary(program);
+	auto result = toBinary!L(program);
 	if (data.length == 0) return result;
 
 	// Make sure there is a null opcode marking the end of the program.
@@ -72,13 +75,14 @@ ubyte* toPortable(const(Opcode)[] program, const(void)[] data = null) @trusted {
 * program that can be executed anywhere.
 *
 * Params:
+*   L = ditto `toPortable`
 *   program = the program to snapshot
 *   env = the environment to snapshot
 * Returns:
 *   A libfp dynarray of bytes; free it with `fp.dynarray.free`.
 */
-ubyte* toPortable(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
-	return toPortable(program, (cast(const(ubyte)*) env.memory.ptr)[0 .. memorySizeBytes]);
+ubyte* toPortable(alias L = defaultLookup)(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
+	return toPortable!L(program, (cast(const(ubyte)*) env.memory.ptr)[0 .. memorySizeBytes]);
 }
 
 /**
@@ -87,8 +91,13 @@ ubyte* toPortable(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
 *
 * Note:
 *   The returned environment still needs `setupEnvironment` before it can run.
+*
+* Params:
+*   L = the lookup that resolves the instruction IDs; pass the same one
+*     `toPortable` used
+*   binary = the bytes to deserialize
 */
-PortableProgram fromPortable(const(void)[] binary) @trusted {
+PortableProgram fromPortable(alias L = defaultLookup)(const(void)[] binary) @trusted {
 	auto opcodes = cast(const(SerializationOpcode)*) binary.ptr;
 	size_t count = 0;
 
@@ -104,7 +113,7 @@ PortableProgram fromPortable(const(void)[] binary) @trusted {
 	}
 
 	PortableProgram result;
-	result.program = fromBinary((cast(const(void)*) opcodes)[0 .. count * SerializationOpcode.sizeof]);
+	result.program = fromBinary!L((cast(const(void)*) opcodes)[0 .. count * SerializationOpcode.sizeof]);
 	if (binary.length == 0) return result;
 
 	fillStackBottom(result.environment, binary);
@@ -119,6 +128,10 @@ PortableProgram fromPortable(const(void)[] binary) @trusted {
 * D port can actually compile.
 *
 * Params:
+*   L = the lookup that names the instructions; pass your own
+*     `mizu.lookup.Lookup` instantiation for a program that uses
+*     instructions of your own, and name their modules in `extraImports` so
+*     the generated file can see them
 *   program = the program to generate source for
 *   env = the environment the program should begin executing in
 *   extraImports = extra `import` lines (one per line, including the `import`
@@ -126,7 +139,7 @@ PortableProgram fromPortable(const(void)[] binary) @trusted {
 * Returns:
 *   A libfp string; free it with `fp.string.free`.
 */
-char* generateSourceFile(const(Opcode)[] program, ref RegistersAndStack env, scope const(char)[] extraImports = null) @trusted {
+char* generateSourceFile(alias L = defaultLookup)(const(Opcode)[] program, ref RegistersAndStack env, scope const(char)[] extraImports = null) @trusted {
 	char* out_ = null;
 	char[64] scratch;
 
@@ -143,9 +156,12 @@ char* generateSourceFile(const(Opcode)[] program, ref RegistersAndStack env, sco
 	put("] program = [\n");
 
 	foreach (ref code; program) {
-		auto name = lookup(code.op);
+		immutable id = L.lookupId(code.op);
+		auto name = L.lookupName(id);
 		assert(name.length, "Program contains an instruction the lookup does not know.");
-		put("\tmizu.Opcode(&mizu.");
+		// Mizu's own instructions are reachable through the `mizu` package;
+		// an extension's are whatever `extraImports` brought into scope.
+		put(L.isExtendedId(id) ? "\tmizu.Opcode(&" : "\tmizu.Opcode(&mizu.");
 		put(name);
 		put(", ");
 		putUnsigned(code.out_);
