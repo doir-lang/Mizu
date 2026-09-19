@@ -68,11 +68,14 @@ struct SerializationOpcode {
 * or sent over the network.
 *
 * Params:
+*   L = the lookup that assigns the IDs; pass your own
+*     `mizu.lookup.Lookup` instantiation to serialize a program that uses
+*     instructions of your own
 *   program = the program to serialize
 * Returns:
 *   A libfp dynarray of bytes; free it with `fp.dynarray.free`.
 */
-ubyte* toBinary(const(Opcode)[] program) @trusted {
+ubyte* toBinary(alias L = defaultLookup)(const(Opcode)[] program) @trusted {
 	ubyte* result = null;
 	dynGrowToSize(result, program.length * SerializationOpcode.sizeof);
 
@@ -80,7 +83,7 @@ ubyte* toBinary(const(Opcode)[] program) @trusted {
 	foreach (i, ref code; program) {
 		ops[i] = SerializationOpcode.fromOpcode(code);
 		// Replace the host op pointer with its lookup ID.
-		ops[i].op = lookupId(code.op);
+		ops[i].op = L.lookupId(code.op);
 		version(BigEndian) ops[i].byteswap();
 	}
 	return result;
@@ -90,11 +93,12 @@ ubyte* toBinary(const(Opcode)[] program) @trusted {
 * Converts a blob of `binary` data back into a Mizu program.
 *
 * Params:
+*   L = the lookup that resolves the IDs; pass the same one `toBinary` used
 *   binary = the bytes to deserialize
 * Returns:
 *   A libfp dynarray of opcodes; free it with `fp.dynarray.free`.
 */
-Opcode* fromBinary(const(void)[] binary) @trusted {
+Opcode* fromBinary(alias L = defaultLookup)(const(void)[] binary) @trusted {
 	assert(binary.length % SerializationOpcode.sizeof == 0);
 	immutable count = binary.length / SerializationOpcode.sizeof;
 
@@ -107,7 +111,7 @@ Opcode* fromBinary(const(void)[] binary) @trusted {
 		// The blob stores little-endian integers; swap if we are not.
 		version(BigEndian) code.byteswap();
 		// Turn the ID back into a pointer.
-		code.op = cast(ulong) cast(size_t) lookupPointer(cast(Id) code.op);
+		code.op = cast(ulong) cast(size_t) L.lookupPointer(cast(Id) code.op);
 		result[i] = code.toOpcode();
 	}
 	return result;

@@ -83,6 +83,42 @@ branch, the way [bc-threads](https://github.com/doir-lang/bc-threads) pins libfp
 Then `import mizu;` for the VM and every instruction, plus `import mizu.ffi;` if you want the
 foreign function interface.
 
+### Adding your own instructions
+
+Write them in a module of your own, then build a lookup table that knows about both halves:
+
+```d
+module myproject.instructions;
+
+import mizu;
+
+extern(C) void* myInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+    registers[pc.out_] = registers[pc.a] + 1;
+    mixin(mizuNext);
+}
+
+/// Mizu's instructions, with this module's appended.
+alias myLookup = Lookup!(myproject.instructions);
+```
+
+`myLookup` has the same members as `mizu.lookup` itself — `table`, `lookupId`, `lookupName`,
+`lookupPointer`, `lookup` — with Mizu's IDs unchanged and yours starting at
+`myLookup.builtinCount`. Pass it to the serializers so they resolve both halves:
+
+```d
+auto bytes = toPortable!myLookup(program, environment);
+auto loaded = fromPortable!myLookup(bytes[0 .. ptrLength(bytes)]);
+```
+
+Every function in `mizu.serialize` and `mizu.portable_format` takes a lookup as its first
+template argument and defaults to `Lookup!()`, so code that only uses Mizu's own instructions
+needs no changes.
+
+This is a template rather than, say, a list of modules `mizu.lookup` imports, because Mizu is
+normally compiled as its own static library — long before your instructions exist. A template is
+instantiated in *your* compilation instead, where the compiler can see both halves, and the table
+is still built entirely at compile time.
+
 ## Building this repository
 
 ```sh
@@ -259,7 +295,10 @@ through `bool <name>_registered` static initializers into three `std::unordered_
 `-betterC` has no static constructors. `mizu.lookup` instead enumerates the instruction modules
 with `__traits(allMembers)` and emits a table into read-only data. Nothing allocates, nothing
 runs before `main`, IDs no longer depend on static initialization order — and
-`release_lookup_data()` is gone, because there is nothing left to release.
+`release_lookup_data()` is gone, because there is nothing left to release. What the C++ bought
+with that registration — a downstream project adding instructions of its own — comes instead
+from `mizu.lookup.Lookup` being a template the downstream instantiates with its own modules; see
+[Adding your own instructions](#adding-your-own-instructions).
 
 **Exceptions are gone.** `MIZU_THROW` becomes `mizu.exception.fatal`, which prints to `stderr`
 and aborts. The dynamic loader, which used a `try`/`catch` to implement "try each of these
