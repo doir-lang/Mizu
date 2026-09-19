@@ -218,6 +218,12 @@ Instruction lookupPointer(Id id);
 string lookupName(Id id);
 ```
 
+Names are fully qualified — `mizu.instructions.core.add`, not `add` — so instructions from
+different packages never collide and a name says which module declares it; `lookupId` also
+accepts a bare name, matching the first instruction whose own final component matches.
+`mizu.lookup.unqualifiedName` and `mizu.lookup.moduleOfName` take a stored name apart. This is a
+deliberate break from the C++ version, which registered bare identifiers.
+
 Unlike the C++ version, these tables are built at compile time and live in read-only data, so
 nothing allocates and nothing runs before `main`. IDs are an instruction's index in that table,
 which makes them stable for a given build rather than dependent on static initialization order.
@@ -249,7 +255,23 @@ The layout is: the serialized program, an all-zero opcode as a terminator, then 
 `setupEnvironment` on it before running.
 
 There is also `generateSourceFile`, which emits a self-contained D source file that runs a given
-program in a given environment. The C++ equivalent generated a C++ header.
+program in a given environment. The C++ equivalent generated a C++ header. Because the names in
+the lookup are fully qualified, the generated file imports exactly the modules whose
+instructions the program uses — a downstream package's included — and names each instruction in
+full, so it compiles without being told anything else. A third parameter still takes extra
+`import` lines, written after the derived ones, for whatever else a particular build needs:
+
+```d
+import mizu;
+import mizu.instructions.core;
+import myproject.instructions;
+
+static immutable mizu.Opcode[3] program = [
+    mizu.Opcode(&mizu.instructions.core.loadImmediate, 1, 41, 0),
+    mizu.Opcode(&myproject.instructions.myInstruction, 1, 1, 0),
+    mizu.Opcode(&mizu.instructions.core.halt, 0, 0, 0),
+];
+```
 
 > Neither format accounts for differing endianness. Integers are stored little-endian and swapped
 > on a big-endian host, and the op field is pinned at 64 bits, so a blob written on a 64 bit host
