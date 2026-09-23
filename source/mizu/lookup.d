@@ -109,25 +109,20 @@ private template AliasSeq(Args...) { alias AliasSeq = Args; }
 *
 * The FFI comes last deliberately: see the warning in the module docs.
 */
+private alias ownModules = AliasSeq!(
+	mizu.instructions.core,
+	mizu.instructions.dbg,
+	mizu.instructions.f32,
+	mizu.instructions.f64,
+	mizu.instructions.unsafe,
+	mizu.instructions.parallel,
+);
+
+/// Ditto.
 static if (!noFFI)
-	private alias builtinModules = AliasSeq!(
-		mizu.instructions.core,
-		mizu.instructions.dbg,
-		mizu.instructions.f32,
-		mizu.instructions.f64,
-		mizu.instructions.unsafe,
-		mizu.instructions.parallel,
-		mizu.ffi.instructions,
-	);
+	private alias builtinModules = AliasSeq!(ownModules, mizu.ffi.instructions);
 else
-	private alias builtinModules = AliasSeq!(
-		mizu.instructions.core,
-		mizu.instructions.dbg,
-		mizu.instructions.f32,
-		mizu.instructions.f64,
-		mizu.instructions.unsafe,
-		mizu.instructions.parallel,
-	);
+	private alias builtinModules = ownModules;
 
 /// True if `mod`.`name` is an instruction `mod` itself declares.
 private template isInstruction(alias mod, string name) {
@@ -429,7 +424,7 @@ unittest {
 	}
 }
 
-version (unittest) private extern(C) void* testExtraInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+version (unittest) private extern(C) void* testExtraInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	return null;
 }
 

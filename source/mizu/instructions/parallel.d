@@ -37,6 +37,21 @@ static if (!noHardwareThreads) {
 		RegistersAndStack env;
 	}
 
+	/// The mutex a register names, or a fatal error if it names none. Every
+	/// mutex instruction opens by resolving its operand through this.
+	private BcMutex* mutexOf(ulong value) @trusted {
+		auto mutex = cast(BcMutex*) value;
+		if (mutex is null) fatal("Mutex does not exist.");
+		return mutex;
+	}
+
+	/// Ditto, for a channel.
+	private Channel* channelOf(ulong value) @trusted {
+		auto channel = cast(Channel*) value;
+		if (channel is null) fatal("Channel does not exist.");
+		return channel;
+	}
+
 	private extern(C) void* threadTrampoline(void* argument) @trusted {
 		import mizu.ffi.instructions : releaseTypeStack;
 
@@ -49,6 +64,14 @@ static if (!noHardwareThreads) {
 		// reach the moment this function returns; free it while it still can be.
 		releaseTypeStack();
 		return result;
+	}
+} else {
+	/// The coroutine fallback's channel is a plain dynarray of blobs, but it
+	/// is resolved (and refused) exactly as the threaded one is.
+	private ulong* channelOf(ulong value) @trusted {
+		auto channel = cast(ulong*) value;
+		if (channel is null) fatal("Channel does not exist.");
+		return channel;
 	}
 }
 
@@ -161,7 +184,7 @@ bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister) @trust
 // declaration nested inside a function body does not reach the mangling.
 version(OSX) {
 	import core.sys.posix.time : timespec;
-	private extern(C) @nogc nothrow int clock_gettime(int, timespec*);
+	private extern(C) int clock_gettime(int, timespec*);
 	private alias darwinClockGettime = clock_gettime;
 	private enum int darwinClockMonotonic = 6;
 }
@@ -312,8 +335,7 @@ void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 void* channelClose(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.channel : channelClose_ = close, channelFree = free;
-		auto channel = cast(Channel*) registers[pc.a];
-		if (channel is null) fatal("Channel does not exist.");
+		auto channel = channelOf(registers[pc.a]);
 		channelClose_(channel);
 		channelFree(channel);
 	} else {
@@ -335,14 +357,12 @@ void* channelClose(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.channel : channelReceive_ = receive;
-		auto channel = cast(Channel*) registers[pc.a];
-		if (channel is null) fatal("Channel does not exist.");
+		auto channel = channelOf(registers[pc.a]);
 		auto received = channelReceive_(channel);
 		registers[pc.out_] = received.isNull ? 0 : received.get;
 	} else {
 		import fp.dynarray : length, removeAt;
-		auto channel = cast(ulong*) registers[pc.a];
-		if (channel is null) fatal("Channel does not exist.");
+		auto channel = channelOf(registers[pc.a]);
 		if (length(channel) == 0)
 			--pc; // Nothing to receive yet: yield and try again.
 		else {
@@ -364,13 +384,11 @@ void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.channel : channelSend_ = send;
-		auto channel = cast(Channel*) registers[pc.a];
-		if (channel is null) fatal("Channel does not exist.");
+		auto channel = channelOf(registers[pc.a]);
 		channelSend_(channel, registers[pc.b]);
 	} else {
 		import fp.dynarray : length, capacity, pushBack;
-		auto channel = cast(ulong*) registers[pc.a];
-		if (channel is null) fatal("Channel does not exist.");
+		auto channel = channelOf(registers[pc.a]);
 		if (length(channel) == capacity(channel))
 			--pc; // Full: yield and try again.
 		else {
@@ -422,8 +440,7 @@ void* mutexCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : mutexFree_ = free;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		mutexFree_(mutex);
 	}
 	registers[pc.a] = registers[pc.b];
@@ -439,8 +456,7 @@ void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : writeLock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		writeLock(mutex);
 	} else {
 		if (registers[pc.a] != 0)
@@ -460,8 +476,7 @@ void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : tryWriteLock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		registers[pc.out_] = tryWriteLock(mutex);
 	} else {
 		if (registers[pc.a] == 0) {
@@ -481,8 +496,7 @@ void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : writeUnlock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		writeUnlock(mutex);
 	} else {
 		if (registers[pc.a] == ulong.max)
@@ -503,8 +517,7 @@ void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : readLock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		readLock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] < 0)
@@ -524,8 +537,7 @@ void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : tryReadLock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		registers[pc.out_] = tryReadLock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] >= 0) {
@@ -545,8 +557,7 @@ void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 void* mutexReadUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!noHardwareThreads) {
 		import bc.mutex : readUnlock;
-		auto mutex = cast(BcMutex*) registers[pc.a];
-		if (mutex is null) fatal("Mutex does not exist.");
+		auto mutex = mutexOf(registers[pc.a]);
 		readUnlock(mutex);
 	} else {
 		if (*cast(long*)&registers[pc.a] > 0)
