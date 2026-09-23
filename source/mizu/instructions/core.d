@@ -218,6 +218,26 @@ void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
+* Checks that `address` is somewhere in the stack proper: past the boundary
+* the registers sit below, and no further down than the bottom.
+*
+* Not an instruction - it has none of `Instruction`'s signature, so
+* `mizu.lookup` does not pick it up.
+*/
+private void assertOnStack(const RegistersAndStack* env, const(ubyte)* address) {
+	assert(address > env.stackBoundary);
+	assert(address <= env.stackBottom);
+}
+
+/// The address `offset` bytes up the stack from `sp`, bounds checked. Every
+/// stack load and store starts here.
+private ubyte* stackAddress(const RegistersAndStack* env, ubyte* sp, ulong offset) {
+	ubyte* address = sp + offset;
+	assertOnStack(env, address);
+	return address;
+}
+
+/**
 * Loads a 64 bit integer from the stack.
 *
 * Params:
@@ -225,9 +245,7 @@ void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 *   a = register holding a byte offset from the current stack pointer
 */
 void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.a];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.a]);
 	registers[pc.out_] = *cast(ulong*) offset;
 	mixin(mizuNext);
 }
@@ -241,9 +259,7 @@ void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 *   b = register holding a byte offset from the current stack pointer
 */
 void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.b];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.b]);
 	registers[pc.out_] = *cast(ulong*) offset = registers[pc.a];
 	mixin(mizuNext);
 }
@@ -256,9 +272,7 @@ void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 *   a = register holding a byte offset from the current stack pointer
 */
 void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.a];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.a]);
 	registers[pc.out_] = *cast(uint*) offset;
 	mixin(mizuNext);
 }
@@ -272,9 +286,7 @@ void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 *   b = register holding a byte offset from the current stack pointer
 */
 void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.b];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.b]);
 	registers[pc.out_] = *cast(uint*) offset = cast(uint) registers[pc.a];
 	mixin(mizuNext);
 }
@@ -287,9 +299,7 @@ void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 *   a = register holding a byte offset from the current stack pointer
 */
 void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.a];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.a]);
 	registers[pc.out_] = *cast(ushort*) offset;
 	mixin(mizuNext);
 }
@@ -303,9 +313,7 @@ void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 *   b = register holding a byte offset from the current stack pointer
 */
 void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.b];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.b]);
 	registers[pc.out_] = *cast(ushort*) offset = cast(ushort) registers[pc.a];
 	mixin(mizuNext);
 }
@@ -318,9 +326,7 @@ void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 *   a = register holding a byte offset from the current stack pointer
 */
 void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.a];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.a]);
 	registers[pc.out_] = *offset;
 	mixin(mizuNext);
 }
@@ -334,9 +340,7 @@ void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 *   b = register holding a byte offset from the current stack pointer
 */
 void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	ubyte* offset = sp + registers[pc.b];
-	assert(offset > env.stackBoundary);
-	assert(offset <= env.stackBottom);
+	ubyte* offset = stackAddress(env, sp, registers[pc.b]);
 	registers[pc.out_] = *offset = cast(ubyte) registers[pc.a];
 	mixin(mizuNext);
 }
@@ -349,8 +353,7 @@ void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* stackPush(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp -= registers[pc.a];
-	assert(sp > env.stackBoundary);
-	assert(sp <= env.stackBottom);
+	assertOnStack(env, sp);
 	mixin(mizuNext);
 }
 
@@ -362,8 +365,7 @@ void* stackPush(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 */
 void* stackPushImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp -= pc.immediate;
-	assert(sp > env.stackBoundary);
-	assert(sp <= env.stackBottom);
+	assertOnStack(env, sp);
 	mixin(mizuNext);
 }
 
@@ -375,8 +377,7 @@ void* stackPushImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 */
 void* stackPop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp += registers[pc.a];
-	assert(sp > env.stackBoundary);
-	assert(sp <= env.stackBottom);
+	assertOnStack(env, sp);
 	mixin(mizuNext);
 }
 
@@ -388,8 +389,7 @@ void* stackPop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 */
 void* stackPopImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp += pc.immediate;
-	assert(sp > env.stackBoundary);
-	assert(sp <= env.stackBottom);
+	assertOnStack(env, sp);
 	mixin(mizuNext);
 }
 
@@ -403,8 +403,7 @@ void* stackPopImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 void* offsetOfStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable offset = *cast(long*)&registers[pc.a];
 	auto bottom = env.stackBottom - offset;
-	assert(bottom > env.stackBoundary);
-	assert(bottom <= env.stackBottom);
+	assertOnStack(env, bottom);
 	registers[pc.out_] = bottom - sp;
 	mixin(mizuNext);
 }

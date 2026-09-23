@@ -316,7 +316,7 @@ unittest {
 	assert(findSlices(text, "import mizu.ffi.instructions;", 0) == size_t.max);
 }
 
-version (unittest) private extern(C) void* testPortableInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+version (unittest) private extern(C) void* testPortableInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	return null;
 }
 

@@ -62,8 +62,8 @@ version(MizuAllowDMD) enum bool allowDMD = true;
 else enum bool allowDMD = false;
 
 /// True when the platform has a dynamic loader (`dlopen`/`LoadLibrary`).
-version(linux) enum bool dynamicLoadingSupported = true;
-else version(OSX) enum bool dynamicLoadingSupported = true;
-else version(FreeBSD) enum bool dynamicLoadingSupported = true;
+/// Every Posix has `dlopen`, so the list the C++ original enumerated - linux,
+/// OSX, FreeBSD - is just `Posix`.
+version(Posix) enum bool dynamicLoadingSupported = true;
 else version(Windows) enum bool dynamicLoadingSupported = true;
 else enum bool dynamicLoadingSupported = false;

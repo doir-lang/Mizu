@@ -7,13 +7,9 @@
 	"importPaths": ["source"],
 
 	"dependencies": {
-		"libfp": {
-			"repository": "git+https://github.com/doir-lang/libfp.git",
-			"version": "674acd77c2b8411144c2e162015145df7edcf1a0"
-		},
 		"bc-threads": {
 			"repository": "git+https://github.com/doir-lang/bc-threads.git",
-			"version": "f3e45474cb010bcdca84c30b60619b4c61249dc1"
+			"version": "b78c6487442aebeecb4f4e0dc2d3b92a31a524f8"
 		}
 	},
 

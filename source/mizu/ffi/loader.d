@@ -34,11 +34,11 @@ private void* fail(const(char)* reason) {
 	return null;
 }
 
-/// The platform's extension for shared libraries, including the dot.
-version(linux) enum string sharedLibraryExtension = ".so";
-else version(FreeBSD) enum string sharedLibraryExtension = ".so";
-else version(OSX) enum string sharedLibraryExtension = ".dylib";
+/// The platform's extension for shared libraries, including the dot. `.so` is
+/// every Posix but Darwin, so it is the fallthrough rather than a list.
+version(OSX) enum string sharedLibraryExtension = ".dylib";
 else version(Windows) enum string sharedLibraryExtension = ".dll";
+else version(Posix) enum string sharedLibraryExtension = ".so";
 else enum string sharedLibraryExtension = "";
 
 /**
