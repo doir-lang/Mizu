@@ -495,6 +495,81 @@ unittest {
 }
 
 unittest {
+	// unsafe.pointerStore* / pointerLoad* reach the same bytes a stack store
+	// wrote, at every width, through an address rather than an offset.
+	static immutable Opcode[16] program = [
+		Opcode(&loadImmediate, Registers.t(0)).setImmediate(32),
+		Opcode(&stackPush, 0, Registers.t(0), 0),
+		// t1 = the address of the region just reserved.
+		Opcode(&loadImmediate, Registers.t(2)).setImmediate(0),
+		Opcode(&pointerToStack, Registers.t(1), Registers.t(2)),
+
+		// A different value at each width, each 8 bytes apart so the narrow
+		// stores cannot overlap one another.
+		Opcode(&loadImmediate, Registers.t(3)).setImmediate(0x0BADF00D),
+		Opcode(&pointerStoreU64, 0, Registers.t(3), Registers.t(1)),
+
+		Opcode(&loadImmediate, Registers.t(4)).setImmediate(8),
+		Opcode(&add, Registers.t(4), Registers.t(1), Registers.t(4)),
+		Opcode(&loadImmediate, Registers.t(5)).setImmediate(0xFEED),
+		Opcode(&pointerStoreU16, 0, Registers.t(5), Registers.t(4)),
+
+		Opcode(&loadImmediate, Registers.t(6)).setImmediate(16),
+		Opcode(&add, Registers.t(6), Registers.t(1), Registers.t(6)),
+		Opcode(&loadImmediate, Registers.t(7)).setImmediate(0x7F),
+		Opcode(&pointerStoreU8, 0, Registers.t(7), Registers.t(6)),
+
+		// Read the 64 bit one back the way `stack_load_u64` would not be able
+		// to: through the address itself.
+		Opcode(&pointerLoadU64, Registers.t(8), Registers.t(1)),
+		Opcode(&halt),
+	];
+
+	RegistersAndStack env;
+	run(program[], env);
+	assert(env.memory[Registers.t(8)] == 0x0BADF00D);
+	// The two narrow stores wrote where their addresses said, and the store's
+	// `out_` of 0 discarded the extra copy rather than clobbering anything.
+	assert(env.memory[Registers.t(4)] == env.memory[Registers.t(1)] + 8);
+	assert(env.memory[Registers.t(6)] == env.memory[Registers.t(1)] + 16);
+}
+
+unittest {
+	// A pointer load narrower than 64 bits reads only its own width, and a
+	// store of the same width leaves the bytes above it alone.
+	static immutable Opcode[12] program = [
+		Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+		Opcode(&allocate, Registers.t(1), Registers.t(0)),
+
+		// Fill all eight bytes, then overwrite the low two. Both halves of the
+		// pattern explicitly: a Mizu immediate is 32 bits, so the fresh
+		// allocation's top four bytes would otherwise stay uninitialized and
+		// the `u64` read below would be checking heap residue.
+		Opcode(&loadImmediate, Registers.t(2)).setImmediate(0xAAAAAAAA),
+		Opcode(&loadUpperImmediate, Registers.t(2)).setImmediate(0xAAAAAAAA),
+		Opcode(&pointerStoreU64, 0, Registers.t(2), Registers.t(1)),
+		Opcode(&loadImmediate, Registers.t(3)).setImmediate(0x1234),
+		Opcode(&pointerStoreU16, Registers.t(4), Registers.t(3), Registers.t(1)),
+
+		// u16 sees the overwrite, u32 sees it beside the byte above it, and
+		// u64 still has the top half of the original.
+		Opcode(&pointerLoadU16, Registers.t(5), Registers.t(1)),
+		Opcode(&pointerLoadU32, Registers.t(6), Registers.t(1)),
+		Opcode(&pointerLoadU64, Registers.t(7), Registers.t(1)),
+		Opcode(&freeAllocated, 0, Registers.t(1), 0),
+		Opcode(&halt),
+	];
+
+	RegistersAndStack env;
+	run(program[], env);
+	assert(env.memory[Registers.t(5)] == 0x1234);
+	assert(env.memory[Registers.t(6)] == 0xAAAA1234);
+	assert(env.memory[Registers.t(7)] == 0xAAAAAAAA_AAAA1234);
+	// A store's `out_` is the extra copy, truncated to the width it wrote.
+	assert(env.memory[Registers.t(4)] == 0x1234);
+}
+
+unittest {
 	// Fork a thread, hand a value back through a channel, and join it.
 	static immutable Opcode[12] program = [
 		Opcode(&findLabel, 200).setImmediate(label2immediate("work")),
