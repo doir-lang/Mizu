@@ -166,3 +166,116 @@ void* setMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 	memset(cast(void*) registers[pc.out_], cast(int) registers[pc.a], pc.b);
 	mixin(mizuNext);
 }
+
+/**
+* Loads a 64 bit integer from the memory a register points at.
+*
+* This family is `mizu.instructions.core`'s `stack_load_*` / `stack_store_*`
+* with `sp + offset` replaced by the register: same operands in the same
+* slots, an address instead of an offset, and no bounds check, since the
+* address may just as well be a host allocation from `allocate` as somewhere
+* on the stack.
+*
+* `out_` stays a genuine output rather than becoming the address the way
+* `copyMemory`'s is. That is the whole reason these exist next to it: a
+* compiler that binds `out_` to the destination register of a call cannot
+* express an instruction that reads `out_` as an input, so `copyMemory` is
+* unreachable from such a calling convention and dereferencing a pointer was
+* not expressible at all.
+*
+* Params:
+*   out_ = register to store the result in
+*   a = register holding the address to read
+*/
+void* pointerLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ulong*) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Copies a 64 bit integer from a register into the memory a register points at.
+*
+* Params:
+*   out_ = register to store another copy in
+*   a = register holding the value to copy
+*   b = register holding the address to write
+*/
+void* pointerStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ulong*) registers[pc.b] = registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Loads a 32 bit integer from the memory a register points at.
+*
+* Params:
+*   out_ = register to store the result in
+*   a = register holding the address to read
+*/
+void* pointerLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(uint*) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Copies a 32 bit integer from a register into the memory a register points at.
+*
+* Params:
+*   out_ = register to store another copy in
+*   a = register holding the value to copy
+*   b = register holding the address to write
+*/
+void* pointerStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(uint*) registers[pc.b] = cast(uint) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Loads a 16 bit integer from the memory a register points at.
+*
+* Params:
+*   out_ = register to store the result in
+*   a = register holding the address to read
+*/
+void* pointerLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ushort*) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Copies a 16 bit integer from a register into the memory a register points at.
+*
+* Params:
+*   out_ = register to store another copy in
+*   a = register holding the value to copy
+*   b = register holding the address to write
+*/
+void* pointerStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ushort*) registers[pc.b] = cast(ushort) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Loads an 8 bit integer from the memory a register points at.
+*
+* Params:
+*   out_ = register to store the result in
+*   a = register holding the address to read
+*/
+void* pointerLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ubyte*) registers[pc.a];
+	mixin(mizuNext);
+}
+
+/**
+* Copies an 8 bit integer from a register into the memory a register points at.
+*
+* Params:
+*   out_ = register to store another copy in
+*   a = register holding the value to copy
+*   b = register holding the address to write
+*/
+void* pointerStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = *cast(ubyte*) registers[pc.b] = cast(ubyte) registers[pc.a];
+	mixin(mizuNext);
+}
