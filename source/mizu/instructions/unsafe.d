@@ -9,11 +9,20 @@ import core.stdc.stdio : fflush, fputs, stdout;
 import core.stdc.stdlib : malloc, free;
 import core.stdc.string : memcpy, memset;
 
+static import core.checkedint;
+
 static import fp.pointer;
 
 import mizu.opcode;
 
-@nogc nothrow extern(C):
+@nogc nothrow:
+
+// `bytes` as an allocation size, or `size_t.max`, which no allocator grants, when a 32 bit host could not address that many.
+private size_t hostSize(ulong bytes) {
+	return bytes > size_t.max ? size_t.max : cast(size_t) bytes;
+}
+
+extern(C):
 
 /**
 * Allocates memory on the host application heap with C `malloc`.
@@ -41,7 +50,7 @@ import mizu.opcode;
 * ---
 */
 void* allocate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = cast(size_t) malloc(registers[pc.a]);
+	registers[pc.out_] = cast(size_t) malloc(hostSize(registers[pc.a]));
 	mixin(mizuNext);
 }
 
@@ -98,7 +107,9 @@ void* freeAllocated(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* allocateFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = cast(size_t) fp.pointer.malloc!ubyte(registers[pc.a] * registers[pc.b]);
+	bool overflow;
+	immutable bytes = core.checkedint.mulu(registers[pc.a], registers[pc.b], overflow);
+	registers[pc.out_] = overflow ? 0 : cast(size_t) fp.pointer.malloc!ubyte(hostSize(bytes));
 	mixin(mizuNext);
 }
 
@@ -230,7 +241,7 @@ void* pointerToRegister(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* copyMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memcpy(cast(void*) registers[pc.out_], cast(const(void)*) registers[pc.a], registers[pc.b]);
+	memcpy(cast(void*) registers[pc.out_], cast(const(void)*) registers[pc.a], cast(size_t) registers[pc.b]);
 	mixin(mizuNext);
 }
 
@@ -286,7 +297,7 @@ void* copyMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 * ---
 */
 void* setMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memset(cast(void*) registers[pc.out_], cast(int) registers[pc.a], registers[pc.b]);
+	memset(cast(void*) registers[pc.out_], cast(int) registers[pc.a], cast(size_t) registers[pc.b]);
 	mixin(mizuNext);
 }
 

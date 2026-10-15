@@ -16,6 +16,7 @@ private enum modules = [
 	"mizu.serialize",
 	"mizu.portable_format",
 	"mizu.ffi.loader",
+	"mizu.ffi.trampoline",
 	"vm_tests",
 ];
 

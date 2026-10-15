@@ -3,7 +3,7 @@
 *
 * Describing a signature takes two steps: push the return type and then each argument type onto a per-thread type stack, then `createInterface` turns that stack into a reusable interface handle. `call`/`callWithReturn` read the arguments out of the argument registers (`a0`, `a1`, ...).
 *
-* Note: this module binds libffi only; the C++ version's generated WASM trampoline has no D counterpart. With `MizuNoLibFFI` set (implied on WASM) the type-stack instructions still work, but `createInterface` and the two `call` instructions abort.
+* Note: calls go through libffi, or with `MizuFFITrampolines` (implied on WASM) through the compile-time trampolines of `mizu.ffi.trampoline`, which take at most `mizu.config.maximumTrampolineArguments` arguments. With `MizuNoLibFFI` set and no trampolines the type-stack instructions still work, but `createInterface` and the two `call` instructions abort.
 */
 module mizu.ffi.instructions;
 
@@ -17,11 +17,16 @@ static import mizu.error;
 static import mizu.ffi.loader;
 import mizu.opcode;
 
+static if (mizu.config.ffiTrampolines) static import mizu.ffi.trampoline;
 static if (!mizu.config.noLibFFI) static import mizu.ffi.libffi;
 
 @nogc nothrow:
 
-static if (!mizu.config.noLibFFI) {
+// With trampolines an interface is just the `mizu.ffi.trampoline.Trampoline` to call through, so it needs no allocation.
+static if (mizu.config.ffiTrampolines) {
+	// The type stack the `pushType*` instructions build up; thread local, so two Mizu threads can describe two signatures at once.
+	private mizu.ffi.trampoline.Kind* currentKinds = null;
+} else static if (!mizu.config.noLibFFI) {
 	// The type stack the `pushType*` instructions build up; thread local, so two Mizu threads can describe two signatures at once.
 	private mizu.ffi.libffi.ffi_type** currentTypes = null;
 
@@ -42,13 +47,20 @@ static if (!mizu.config.noLibFFI) {
 * ---
 */
 package(mizu) void releaseTypeStack() {
-	static if (!mizu.config.noLibFFI)
+	static if (mizu.config.ffiTrampolines)
+		fp.dynarray.free(currentKinds);
+	else static if (!mizu.config.noLibFFI)
 		fp.dynarray.free(currentTypes);
 }
 
 // Shared body of `call` and `callWithReturn`; `hasReturn` stores the result in `out_`.
 private void* callImpl(bool hasReturn)(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	static if (mizu.config.noLibFFI)
+	static if (mizu.config.ffiTrampolines) {
+		auto trampoline = cast(mizu.ffi.trampoline.Trampoline) registers[pc.b];
+		if (trampoline is null) mizu.error.fatal("FFI Interface does not exist!");
+		ulong discarded;
+		trampoline(cast(void*) registers[pc.a], &registers[Registers.a(0)], hasReturn ? &registers[pc.out_] : &discarded);
+	} else static if (mizu.config.noLibFFI)
 		mizu.error.fatal("This build of Mizu has no FFI backend (MizuNoLibFFI).");
 	else {
 		auto func = cast(void*) registers[pc.a];
@@ -70,9 +82,12 @@ private void* callImpl(bool hasReturn)(Opcode* pc, ulong* registers, RegistersAn
 	mixin(mizuNext);
 }
 
-// Pushes one type descriptor onto the current type stack, aborting if it cannot grow.
-private void pushType(string typeName)() {
-	static if (!mizu.config.noLibFFI)
+// Pushes one type onto the current type stack, named as libffi and `mizu.ffi.trampoline.Kind` name it, aborting if it cannot grow.
+private void pushType(string typeName, string kindName)() {
+	static if (mizu.config.ffiTrampolines) {
+		if (!fp.dynarray.pushBack(currentKinds, mixin("mizu.ffi.trampoline.Kind." ~ kindName)))
+			mizu.error.fatal("Failed to grow the FFI type stack.");
+	} else static if (!mizu.config.noLibFFI)
 		if (!fp.dynarray.pushBack(currentTypes, &mixin("mizu.ffi.libffi.ffi_type_" ~ typeName)))
 			mizu.error.fatal("Failed to grow the FFI type stack.");
 }
@@ -103,7 +118,7 @@ extern(C):
 * ---
 */
 void* pushTypeVoid(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"void"();
+	pushType!("void", "void_")();
 	mixin(mizuNext);
 }
 
@@ -130,7 +145,7 @@ void* pushTypeVoid(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* pushTypePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"pointer"();
+	pushType!("pointer", "pointer")();
 	mixin(mizuNext);
 }
 
@@ -157,7 +172,7 @@ void* pushTypePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* pushTypeI32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"sint32"();
+	pushType!("sint32", "i32")();
 	mixin(mizuNext);
 }
 
@@ -184,7 +199,7 @@ void* pushTypeI32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pushTypeU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"uint32"();
+	pushType!("uint32", "u32")();
 	mixin(mizuNext);
 }
 
@@ -211,7 +226,7 @@ void* pushTypeU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pushTypeI64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"sint64"();
+	pushType!("sint64", "i64")();
 	mixin(mizuNext);
 }
 
@@ -238,7 +253,7 @@ void* pushTypeI64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pushTypeU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"uint64"();
+	pushType!("uint64", "u64")();
 	mixin(mizuNext);
 }
 
@@ -265,7 +280,7 @@ void* pushTypeU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pushTypeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"float"();
+	pushType!("float", "f32")();
 	mixin(mizuNext);
 }
 
@@ -292,7 +307,7 @@ void* pushTypeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pushTypeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	pushType!"double"();
+	pushType!("double", "f64")();
 	mixin(mizuNext);
 }
 
@@ -321,12 +336,13 @@ void* pushTypeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* clearTypeStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	static if (!mizu.config.noLibFFI) fp.dynarray.clear(currentTypes);
+	static if (mizu.config.ffiTrampolines) fp.dynarray.clear(currentKinds);
+	else static if (!mizu.config.noLibFFI) fp.dynarray.clear(currentTypes);
 	mixin(mizuNext);
 }
 
 /**
-* Converts this thread's type stack into an interface describing a function's signature, handing the stack over to it and leaving this thread's empty. An empty stack, or one libffi rejects, is fatal.
+* Converts this thread's type stack into an interface describing a function's signature, leaving this thread's stack empty. An empty stack, or one the backend rejects, is fatal: libffi's own checks, or for trampolines a `void` argument or more than `mizu.config.maximumTrampolineArguments` arguments.
 *
 * The first type on the stack is the return type and everything after it is a parameter; use `pushTypeVoid` for a function that returns nothing.
 *
@@ -353,7 +369,16 @@ void* clearTypeStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	static if (mizu.config.noLibFFI)
+	static if (mizu.config.ffiTrampolines) {
+		immutable count = fp.pointer.length(currentKinds);
+		if (count == 0)
+			mizu.error.fatal("Function interfaces must at least specify the return type!");
+		auto trampoline = mizu.ffi.trampoline.find(currentKinds[0 .. count]);
+		if (trampoline is null)
+			mizu.error.fatal("No FFI trampoline for a void argument, or for more arguments than ", mizu.config.maximumTrampolineArguments);
+		fp.dynarray.clear(currentKinds);
+		registers[pc.out_] = cast(size_t) trampoline;
+	} else static if (mizu.config.noLibFFI)
 		mizu.error.fatal("This build of Mizu has no FFI backend (MizuNoLibFFI).");
 	else {
 		if (fp.pointer.length(currentTypes) == 0)
@@ -398,7 +423,9 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* freeInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	static if (!mizu.config.noLibFFI) {
+	static if (mizu.config.ffiTrampolines) {
+		if (registers[pc.a] == 0) mizu.error.fatal("FFI Interface does not exist!");
+	} else static if (!mizu.config.noLibFFI) {
 		auto iface = cast(Interface*) registers[pc.a];
 		if (iface is null) mizu.error.fatal("FFI Interface does not exist!");
 		fp.dynarray.free(iface.types);

@@ -27,13 +27,13 @@ noreturn fatal(scope const(char)* message) @trusted {
 
 /// Ditto, with one integer detail appended.
 noreturn fatal(scope const(char)* message, long detail) @trusted {
-	cast(void) fprintf(stderr, "mizu: fatal: %s%ld\n", message, detail);
+	cast(void) fprintf(stderr, "mizu: fatal: %s%lld\n", message, detail);
 	abort();
 	assert(0);
 }
 
-// Watching `fatal` from inside the process it ends means catching `abort`'s `SIGABRT` and jumping back out of the handler.
-version(Posix) {
+// Watching `fatal` from inside the process it ends means catching `abort`'s `SIGABRT` and jumping back out of the handler; on WASI `abort` traps, which nothing can catch.
+version(WASI) {} else version(Posix) {
 	// druntime passes `sigjmp_buf` by value and lacks it on Darwin, so these take an oversized buffer by pointer.
 
 	// glibc and uClibc export only `__sigsetjmp`, their `sigsetjmp` being a macro around it.
@@ -62,7 +62,7 @@ version(Posix) {
 	private enum int windowsSigabrt = 22;
 }
 
-unittest {
+version(WASI) {} else unittest {
 	// The handler counts arrivals, proving `SIGABRT` was really raised; POSIX restores the mask with `siglongjmp`, Windows reinstalls its handler.
 	__gshared int aborts;
 

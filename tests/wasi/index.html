@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Mizu tests (wasm32-wasi)</title>
+	<style>
+		body { font-family: system-ui, sans-serif; margin: 2em; }
+		pre { background: #f4f4f4; padding: 1em; }
+		.stderr { color: #555; }
+		.passed { color: #070; }
+		.failed { color: #b00; }
+	</style>
+</head>
+<body>
+	<h1>Mizu tests <small>wasm32-wasi</small></h1>
+	<p id="status">Running…</p>
+	<pre id="output"></pre>
+	<script type="module">
+		import { runTests } from "./run.mjs";
+
+		const output = document.getElementById("output");
+		const status = document.getElementById("status");
+		const write = (cls) => (line) => {
+			const span = document.createElement("span");
+			span.className = cls;
+			span.textContent = line + "\n";
+			output.append(span);
+		};
+
+		try {
+			const module = await WebAssembly.compileStreaming(fetch("mizu-tests.wasm"));
+			const threaded = WebAssembly.Module.imports(module).some((i) => i.kind === "memory");
+			if (threaded && !crossOriginIsolated) throw new Error("shared memory needs a cross-origin isolated page; serve it with tools/wasi.py --serve");
+			const code = await runTests(module, write("stdout"), write("stderr"));
+			status.textContent = code === 0 ? "Passed" : `Failed (exit status ${code})`;
+			status.className = code === 0 ? "passed" : "failed";
+		} catch (e) {
+			status.textContent = `Could not run: ${e}`;
+			status.className = "failed";
+		}
+	</script>
+</body>
+</html>

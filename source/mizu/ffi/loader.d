@@ -241,6 +241,7 @@ version(unittest) {
 			["libc.so.6", "libSystem.B.dylib", "libc"];
 }
 
+static if (mizu.config.dynamicLoadingSupported)
 unittest {
 	// Both spellings are tried, so the decorated path runs even where the undecorated one already works.
 	auto plain = loadFirstThatExists(cRuntimeNames[], false);
@@ -297,6 +298,7 @@ unittest {
 	assert(lastError !is null);
 }
 
+static if (mizu.config.dynamicLoadingSupported)
 unittest {
 	// The host executable loads by itself, and its exported symbols are visible through it, which lets the FFI call into the host.
 	auto self = loadCurrentExecutable();
