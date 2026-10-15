@@ -13,3 +13,5 @@ public import mizu.instructions.f32;
 public import mizu.instructions.f64;
 public import mizu.instructions.unsafe;
 public import mizu.instructions.parallel;
+public import mizu.instructions.atomic;
+public import mizu.instructions.checked;
