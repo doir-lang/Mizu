@@ -16,7 +16,7 @@ private void run(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
 }
 
 // `fatal` ends the process, so `aborts` catches its `SIGABRT` and jumps back out of the handler; the branches differ only in spelling.
-version(Posix) {
+version(WASI) {} else version(Posix) {
 	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGABRT;
 
 	// druntime passes `sigjmp_buf` by value, so these take a buffer by pointer; see the matching note in `mizu.error`.
@@ -74,37 +74,47 @@ version(Posix) {
 	}
 }
 
-private extern(C) void onAbort(int) @nogc nothrow {
-	// Windows resets a handler to the default as it raises, so reinstall it to keep one arming good for any number of aborts.
-	version(Windows) cast(void) signal(SIGABRT, &onAbort);
-	version(Posix) siglongjmp(abortEscape.ptr, 1);
-	else version(Windows) longjmp(abortEscape.ptr, 1);
-}
+// Whether `aborts` can watch `fatal`: on WASI `abort` traps, ending every thread, so tests skip the checks that need it.
+version(WASI) private enum bool catchesAborts = false;
+else private enum bool catchesAborts = true;
 
-// Runs `attempt` and reports whether it reached `mizu.error.fatal`; tail-call dispatch means the abandoned VM occupied only one frame.
-private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
-	SavedAbortHandler saved;
-	installAbortHandler(saved);
-
-	// `setjmp` records the frame it was called from, so it must be called here, in the frame being returned to.
-	version(Posix) immutable landed = sigsetjmpByPointer(abortEscape.ptr, 1) != 0;
-	else version(Windows) immutable landed = _setjmp(abortEscape.ptr, null) != 0;
-
-	// `__gshared` because a local's value across a `longjmp` is whatever the optimiser left in its register.
-	__gshared bool aborted;
-	aborted = true;
-	if (!landed) {
-		attempt();
-		aborted = false;
+static if (catchesAborts) {
+	private extern(C) void onAbort(int) @nogc nothrow {
+		// Windows resets a handler to the default as it raises, so reinstall it to keep one arming good for any number of aborts.
+		version(Windows) cast(void) signal(SIGABRT, &onAbort);
+		version(Posix) siglongjmp(abortEscape.ptr, 1);
+		else version(Windows) longjmp(abortEscape.ptr, 1);
 	}
 
-	restoreAbortHandler(saved);
+	// Runs `attempt` and reports whether it reached `mizu.error.fatal`; tail-call dispatch means the abandoned VM occupied only one frame.
+	private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
+		SavedAbortHandler saved;
+		installAbortHandler(saved);
 
-	// The jump skipped `startFromEnvironment`'s cleanup, and a leftover coroutine context would point into the abandoned run's frame.
-	static if (noHardwareThreads) Coroutine.clear();
+		// `setjmp` records the frame it was called from, so it must be called here, in the frame being returned to.
+		version(Posix) immutable landed = sigsetjmpByPointer(abortEscape.ptr, 1) != 0;
+		else version(Windows) immutable landed = _setjmp(abortEscape.ptr, null) != 0;
 
-	return aborted;
+		// `__gshared` because a local's value across a `longjmp` is whatever the optimiser left in its register.
+		__gshared bool aborted;
+		aborted = true;
+		if (!landed) {
+			attempt();
+			aborted = false;
+		}
+
+		restoreAbortHandler(saved);
+
+		// The jump skipped `startFromEnvironment`'s cleanup, and a leftover coroutine context would point into the abandoned run's frame.
+		static if (noHardwareThreads) Coroutine.clear();
+
+		return aborted;
+	}
 }
+
+// Whether the FFI instructions have libffi or trampolines behind them; the tests that also load libraries need a dynamic loader.
+private enum bool hasFFIBackend = !mizu.config.noLibFFI || mizu.config.ffiTrampolines;
+private enum bool callsForeign = hasFFIBackend && mizu.config.dynamicLoadingSupported;
 
 // Host functions the FFI tests call through library handle zero, the executable itself; exported so Windows' `GetProcAddress` finds them too.
 export extern(C) {
@@ -123,6 +133,18 @@ export extern(C) {
 
 // How many times `mizuTestDiscard` has been called.
 private __gshared uint mizuTestDiscardCalls = 0;
+
+// Host functions for the test that passes every type through a foreign call, each checking its arguments and returning a value built from them.
+private extern(C) {
+	int mizuTestMixed(uint a, long b, float c, double d) @nogc nothrow {
+		return a == 7 && b == -(1L << 40) && c == 1.5f && d == -2.25 ? -42 : 0;
+	}
+	uint mizuTestUnsigned(int a) @nogc nothrow { return cast(uint) -a; }
+	ulong mizuTestWide(ulong a, uint b) @nogc nothrow { return a + b; }
+	float mizuTestHalf(double a) @nogc nothrow { return cast(float) (a / 2); }
+	double mizuTestSum(float a, float b, double c) @nogc nothrow { return a + b + c; }
+	void* mizuTestOffset(void* p, int by) @nogc nothrow { return p + by; }
+}
 
 unittest {
 	// Arithmetic and immediates: t0 = 40, t1 = 2, t2 = t0 + t1, t3 = t0 / t1.
@@ -180,7 +202,7 @@ unittest {
 		Opcode(&halt),
 	];
 	RegistersAndStack empty;
-	assert(aborts({ run(overflow[], empty); }));
+	static if (catchesAborts) assert(aborts({ run(overflow[], empty); }));
 }
 
 unittest {
@@ -562,6 +584,7 @@ unittest {
 	run(program[], env);
 }
 
+static if (callsForeign)
 unittest {
 	// `mizuTestLength("Hello 世界")` through libffi, found through library handle zero, the host executable.
 	import mizu.ffi;
@@ -598,6 +621,7 @@ unittest {
 	assert(env.memory[201] == 0);                  // freeInterface cleared it.
 }
 
+static if (callsForeign)
 unittest {
 	// The void call path, which hands libffi a null return slot; `mizuTestDiscard`'s counter is the only evidence it ran.
 	import mizu.ffi;
@@ -1030,6 +1054,24 @@ unittest {
 	assert(env.memory[Registers.t(9)] == 0);         // setMemoryImmediate blanked it
 	assert(env.memory[Registers.t(2)] == 0);         // freeFatPointer cleared the handle
 	assert(env.memory[Registers.t(16)] == 0xBEEF);   // via pointerToStackBottom
+
+	// A size whose bytes overflow 64 bits, or a 32 bit host's address space, fails rather than allocating a truncated block.
+	static immutable Opcode[3] huge = [
+		Opcode(&allocateFatPointer, Registers.t(2), Registers.t(0), Registers.t(1)),
+		Opcode(&allocate, Registers.t(3), Registers.t(4)),
+		Opcode(&halt),
+	];
+	setupEnvironment(env, huge[]);
+	env.memory[Registers.t(0)] = 1UL << 32;
+	env.memory[Registers.t(1)] = 1UL << 32;
+	env.memory[Registers.t(4)] = size_t.sizeof < ulong.sizeof ? (1UL << 32) + 8 : 0;
+	assert(startFromEnvironment(huge[], env) is null);
+	assert(env.memory[Registers.t(2)] == 0);
+	static if (size_t.sizeof < ulong.sizeof) assert(env.memory[Registers.t(3)] == 0);
+	else {
+		import core.stdc.stdlib : free;
+		free(cast(void*) env.memory[Registers.t(3)]);
+	}
 }
 
 unittest {
@@ -1105,6 +1147,7 @@ unittest {
 	run(program[], env);
 }
 
+static if (callsForeign)
 unittest {
 	// A foreign call taking and returning `int32_t`: mizuTestNegate(-5).
 	import mizu.ffi;
@@ -1133,6 +1176,89 @@ unittest {
 	assert(env.memory[201] == 0);                        // freeInterface cleared it.
 }
 
+static if (hasFFIBackend)
+unittest {
+	// Every type, as an argument and as a result, through function pointers placed in 210-215 and arguments staged in 220-232.
+	import mizu.ffi;
+
+	// a(i) = staged register `from`.
+	static Opcode argument(size_t i, Reg from) { return Opcode(&add, Registers.a(i), from, Registers.zero); }
+
+	static immutable Opcode[] program = [
+		// t0 = mizuTestMixed(7, -2^40, 1.5f, -2.25)
+		Opcode(&pushTypeI32), Opcode(&pushTypeU32), Opcode(&pushTypeI64), Opcode(&pushTypeF32), Opcode(&pushTypeF64),
+		Opcode(&createInterface, 201),
+		argument(0, 220), argument(1, 221), argument(2, 222), argument(3, 223),
+		Opcode(&callWithReturn, Registers.t(0), 210, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		// t1 = mizuTestUnsigned(5)
+		Opcode(&pushTypeU32), Opcode(&pushTypeI32),
+		Opcode(&createInterface, 201),
+		argument(0, 224),
+		Opcode(&callWithReturn, Registers.t(1), 211, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		// t2 = mizuTestWide(2^40, 3)
+		Opcode(&pushTypeU64), Opcode(&pushTypeU64), Opcode(&pushTypeU32),
+		Opcode(&createInterface, 201),
+		argument(0, 225), argument(1, 226),
+		Opcode(&callWithReturn, Registers.t(2), 212, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		// t3 = mizuTestHalf(5.0)
+		Opcode(&pushTypeF32), Opcode(&pushTypeF64),
+		Opcode(&createInterface, 201),
+		argument(0, 227),
+		Opcode(&callWithReturn, Registers.t(3), 213, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		// t4 = mizuTestSum(1.5f, 2.5f, 0.25)
+		Opcode(&pushTypeF64), Opcode(&pushTypeF32), Opcode(&pushTypeF32), Opcode(&pushTypeF64),
+		Opcode(&createInterface, 201),
+		argument(0, 228), argument(1, 229), argument(2, 230),
+		Opcode(&callWithReturn, Registers.t(4), 214, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		// t5 = mizuTestOffset(&buffer, 3)
+		Opcode(&pushTypePointer), Opcode(&pushTypePointer), Opcode(&pushTypeI32),
+		Opcode(&createInterface, 201),
+		argument(0, 231), argument(1, 232),
+		Opcode(&callWithReturn, Registers.t(5), 215, 201),
+		Opcode(&freeInterface, 0, 201, 0),
+		Opcode(&halt),
+	];
+
+	static ubyte[8] buffer;
+	RegistersAndStack env;
+	setupEnvironment(env, program);
+	auto memory = env.memory.ptr;
+	memory[210] = cast(size_t) &mizuTestMixed;
+	memory[211] = cast(size_t) &mizuTestUnsigned;
+	memory[212] = cast(size_t) &mizuTestWide;
+	memory[213] = cast(size_t) &mizuTestHalf;
+	memory[214] = cast(size_t) &mizuTestSum;
+	memory[215] = cast(size_t) &mizuTestOffset;
+	memory[220] = 7;
+	memory[221] = -(1L << 40);
+	floatRegister!float(memory, 222) = 1.5f;
+	floatRegister!double(memory, 223) = -2.25;
+	memory[224] = 5;
+	memory[225] = 1UL << 40;
+	memory[226] = 3;
+	floatRegister!double(memory, 227) = 5.0;
+	floatRegister!float(memory, 228) = 1.5f;
+	floatRegister!float(memory, 229) = 2.5f;
+	floatRegister!double(memory, 230) = 0.25;
+	memory[231] = cast(size_t) buffer.ptr;
+	memory[232] = 3;
+	assert(startFromEnvironment(program, env) is null);
+
+	assert(memory[Registers.t(0)] == cast(ulong) -42L);              // i32 results are sign extended,
+	assert(memory[Registers.t(1)] == 0xFFFF_FFFB);                   // u32 ones are not.
+	assert(memory[Registers.t(2)] == (1UL << 40) + 3);
+	assert(floatRegister!float(memory, Registers.t(3)) == 2.5f);
+	assert(floatRegister!double(memory, Registers.t(4)) == 4.25);
+	assert(memory[Registers.t(5)] == cast(size_t) (buffer.ptr + 3));
+	assert(memory[201] == 0);
+}
+
+static if (callsForeign)
 unittest {
 	// Library loading: a name that cannot resolve, and a list of non-path names holding the C library, exercising the loader's search.
 	import mizu.ffi;
@@ -1170,6 +1296,7 @@ unittest {
 	assert(close(cast(Library*) env.memory[Registers.t(0)]));
 }
 
+static if (catchesAborts && hasFFIBackend)
 unittest {
 	// An interface has to describe at least a return type, so building one from an empty type stack is fatal.
 	import mizu.ffi;
@@ -1184,6 +1311,7 @@ unittest {
 	assert(aborts({ run(program[], env); }));
 }
 
+static if (catchesAborts && hasFFIBackend)
 unittest {
 	// A signature wider than the argument registers is fatal, before the function pointer (here, null) is ever used.
 	import mizu.ffi;
@@ -1426,7 +1554,7 @@ unittest {
 }
 
 // The coverage build's asserts throw rather than abort, so `aborts` cannot catch them there.
-version(MizuCoverage) {} else unittest {
+version(MizuCoverage) {} else static if (catchesAborts) unittest {
 	// The pointer twins assert their address is aligned rather than tearing silently.
 	static immutable Opcode[4] program = [
 		Opcode(&pointerToRegister, Registers.t(1), Registers.t(0)),

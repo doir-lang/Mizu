@@ -191,7 +191,8 @@ void* atomicCompareExchange(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = core.atomic.atomicFetchAdd(*cell(registers, pc.a), registers[pc.b]);
+	// `core.atomic.atomicFetchAdd` takes a `size_t`, too narrow on 32 bit targets; wrapping arithmetic recovers the old value from the new.
+	registers[pc.out_] = core.atomic.atomicOp!"+="(*cell(registers, pc.a), registers[pc.b]) - registers[pc.b];
 	mixin(mizuNext);
 }
 
@@ -219,7 +220,7 @@ void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchSubtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = core.atomic.atomicFetchSub(*cell(registers, pc.a), registers[pc.b]);
+	registers[pc.out_] = core.atomic.atomicOp!"-="(*cell(registers, pc.a), registers[pc.b]) + registers[pc.b];
 	mixin(mizuNext);
 }
 
@@ -564,7 +565,7 @@ void* atomicCompareExchangePointer(Opcode* pc, ulong* registers, RegistersAndSta
 * ---
 */
 void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = core.atomic.atomicFetchAdd(*pointee(registers, pc.a), registers[pc.b]);
+	registers[pc.out_] = core.atomic.atomicOp!"+="(*pointee(registers, pc.a), registers[pc.b]) - registers[pc.b];
 	mixin(mizuNext);
 }
 
@@ -593,7 +594,7 @@ void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchSubtractPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = core.atomic.atomicFetchSub(*pointee(registers, pc.a), registers[pc.b]);
+	registers[pc.out_] = core.atomic.atomicOp!"-="(*pointee(registers, pc.a), registers[pc.b]) + registers[pc.b];
 	mixin(mizuNext);
 }
 

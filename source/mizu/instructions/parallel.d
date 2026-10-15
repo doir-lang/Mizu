@@ -358,7 +358,9 @@ void* sleepMicroseconds(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	immutable capacity = registers[pc.a] < 1 ? 1 : registers[pc.a];
+	immutable requested = registers[pc.a] < 1 ? 1 : registers[pc.a];
+	if (requested > size_t.max) mizu.error.fatal("Failed to allocate a channel.");
+	immutable capacity = cast(size_t) requested;
 	static if (!mizu.config.noHardwareThreads) {
 		auto channel = bc.channel.create!ulong(capacity);
 		if (channel is null) mizu.error.fatal("Failed to allocate a channel.");
@@ -752,7 +754,8 @@ unittest {
 	assert(second >= first);
 }
 
-// Only the hardware-thread `delay` really sleeps; the coroutine one rewinds until its deadline passes, never touching `nanosleep`.
+// Only the hardware-thread `delay` really sleeps; the coroutine one rewinds until its deadline passes, never touching `nanosleep`. WASI has no signals to interrupt it.
+version(WASI) {} else
 static if (!mizu.config.noHardwareThreads)
 version(Posix)
 unittest {

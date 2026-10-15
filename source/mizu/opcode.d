@@ -588,24 +588,34 @@ static if (!mizu.config.noHardwareThreads) {
 			assert(sp);
 			getCurrentContext().stackPointer = sp;
 
+			// wasm cannot tail-call from a return block that paths share, so every path ends in this one dispatch, `allHalted` included.
+			Instruction op = &allHalted;
 			if (fp.pointer.length(contexts) == 1) {
 				getCurrentContext().programCounter = ++pc;
-				return pc.op(pc, registers, env, sp);
+				op = pc.op;
+			} else {
+				// Record pc updates (jumps) before switching away.
+				getCurrentContext().programCounter = pc;
+
+				// A loop rather than recursion, so a list of finished contexts terminates instead of overflowing the stack.
+				immutable start = currentContext;
+				do {
+					auto context = &getContext(nextContext());
+					if (context.programCounter is null) continue;
+
+					pc = ++context.programCounter;
+					op = pc.op;
+					env = context.environment;
+					registers = env.memory.ptr;
+					sp = context.stackPointer;
+					break;
+				} while (currentContext != start);
 			}
-			// Record pc updates (jumps) before switching away.
-			getCurrentContext().programCounter = pc;
+			return op(pc, registers, env, sp);
+		}
 
-			// A loop rather than recursion, so a list of finished contexts terminates instead of overflowing the stack.
-			immutable start = currentContext;
-			do {
-				auto index = nextContext();
-				auto context = &getContext(index);
-				if (context.programCounter is null) continue;
-
-				pc = ++context.programCounter;
-				return pc.op(pc, context.environment.memory.ptr, context.environment, context.stackPointer);
-			} while (currentContext != start);
-
+		// What `next` dispatches to once no context has work left.
+		private extern(C) void* allHalted(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 			return null;
 		}
 

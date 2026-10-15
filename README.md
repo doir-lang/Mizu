@@ -52,7 +52,7 @@ extern(C) int main() {
 * **LDC.** This is not a preference, and building with DMD is a compile-time error. See
   [Tail calls](#tail-calls) below.
 * **An optimizing build** (`-O1` or higher). Also not a preference.
-* **libffi**, unless you build with `-version=MizuNoFFI`. Any reasonably recent version works;
+* **libffi**, unless you build with `-version=MizuNoFFI` or `-version=MizuFFITrampolines`. Any reasonably recent version works;
   Mizu declares the handful of entry points it needs itself. Windows does not ship one; see
   [libffi on Windows](#libffi-on-windows).
 
@@ -219,6 +219,46 @@ a locked mutex is therefore waiting for a release that can never arrive: reachin
 means hanging on it. The try-lock instructions have no such problem — they report the refusal and
 carry on — and they are covered.
 
+### WebAssembly
+
+```sh
+python3 tools/wasi.py --serve                      # build for wasm32-wasi with threads and serve a page that runs the tests in a browser
+python3 tools/wasi.py --node                       # build and run the same tests headlessly under Node
+python3 tools/wasi.py --node --single-threaded     # the same without threads, testing the coroutine scheduler
+```
+
+This is bc-threads' WASI harness, adapted. bc-threads enables threads on WASI exactly when the
+target has atomics, and `mizu.config` follows it: the threaded build compiles with
+`-mattr=+atomics,+bulk-memory` and links against [wasi-sdk](https://github.com/WebAssembly/wasi-sdk)'s
+`wasm32-wasip1-threads` libc with a shared, imported memory, while the single-threaded one gets
+the coroutine scheduler, as `MizuNoHardwareThreads` would. Both builds are optimized and add
+`+tail-call`; see [Tail calls](#tail-calls). The script downloads wasi-sdk into `bin/wasi-sdk` on
+first use (or set `WASI_SYSROOT` and `WASI_BUILTINS`), and compiles bc-threads and libfp in from
+the paths `dub describe` reports.
+
+Threads need an LDC newer than 1.43: until
+[ldc-developers/ldc#5268](https://github.com/ldc-developers/ldc/pull/5268), LDC compiled D's
+thread-locals on wasm as ordinary globals, which every thread would share. The script checks for
+this and refuses a threaded build with such a compiler; set `DC` to an LDC master build (CI uses
+`ldc-master`), or pass `--single-threaded`.
+
+The tests run through [@tybys/wasm-util](https://github.com/toyobayashi/wasm-util)'s WASI and
+[@emnapi/wasi-threads](https://github.com/toyobayashi/emnapi/tree/main/packages/wasi-threads),
+which starts each thread on a Web Worker (or a Node worker thread); the script installs both into
+`bin/wasi`, where the page and [tests/wasi/node.mjs](tests/wasi/node.mjs) import them alike. A
+page may block only off its main thread, so [tests/wasi/run.mjs](tests/wasi/run.mjs) runs the
+tests on a worker, and every thread reports its output and failures over a `BroadcastChannel`,
+since the thread that would otherwise hear of them may be blocked joining. Shared memory also
+needs a cross-origin isolated page, so `--serve` sends the `Cross-Origin-Opener-Policy` and
+`Cross-Origin-Embedder-Policy` headers. Output arrives a line at a time, so a hung test shows the
+module it stopped in but not the test index.
+
+Foreign calls go through the trampoline backend (see [FFI trampolines](#ffi-trampolines)), but
+WASI has no dynamic loader, so the tests that load libraries or look functions up by name are
+skipped there. `abort` is a trap in wasm that
+no handler can catch, so the checks that `fatal` really is reached are skipped too; a failed
+assertion on any thread aborts, and the runner reports it as exit status 134.
+
 ### Profiling
 
 ```sh
@@ -289,6 +329,11 @@ So the port relies on LLVM's ordinary tail call optimization, which means:
 `dub build` and `dub test` cannot accidentally produce a broken VM, and `mizu.opcode` refuses DMD at
 compile time. If you build Mizu by hand, pass `-O2`.
 
+WebAssembly also needs the `tail-call` feature (`-mattr=+tail-call`), which every current browser
+and Node support. Unlike x86, LLVM's wasm backend will not duplicate a return block that several
+paths share in order to tail-call from each, so an instruction that dispatches from more than one
+place must funnel them into a single call, as `Coroutine.next` does.
+
 This is a narrower window than the C++ version's, which is why it is called out here rather
 than buried: the C++ README warned that MSVC and avr-gcc would produce programs that crash, and
 the D port's equivalent warning is "not LDC, or not optimized".
@@ -303,16 +348,38 @@ Boolean knobs are D `version` identifiers, which `dub` can set for you:
 
 | Version | Effect |
 | --- | --- |
-| `MizuNoHardwareThreads` | Emulate threads with the round-robin coroutine scheduler. Implied on WASM. |
+| `MizuNoHardwareThreads` | Emulate threads with the round-robin coroutine scheduler. Implied wherever bc-threads has no threads, such as wasm built without atomics. |
 | `MizuEnableTracing` | Every instruction prints its name and operands as it runs. |
 | `MizuNoFFI` | Drop the FFI entirely, and with it the libffi dependency. |
-| `MizuNoLibFFI` | Keep the FFI instructions but bind no backend; the call instructions abort. |
+| `MizuNoLibFFI` | Keep the FFI instructions but do not bind libffi; without `MizuFFITrampolines` the call instructions abort. |
+| `MizuFFITrampolines` | Call through compile-time trampolines instead of libffi, which is then not needed. Implied on WASM. See [FFI trampolines](#ffi-trampolines). |
 | `MizuAllowDMD` | Let DMD compile these sources, for tools that only analyse them; pair it with libfp's `FpAllowDMD`. See [Building this repository](#building-this-repository). |
 
 D has no equivalent of `-DNAME=value`, so the two numeric knobs that used to be CMake cache
 variables are `enum`s in [source/mizu/config.d](source/mizu/config.d):
 `stackSizeKilobytes` (was `MIZU_STACK_SIZE`) and `maximumLabelSearch` (was
-`MIZU_MAXIMUM_LABEL_SEARCH`).
+`MIZU_MAXIMUM_LABEL_SEARCH`). A third, `maximumTrampolineArguments`, is new to the port.
+
+### FFI trampolines
+
+libffi builds calls at run time from machine code, so it has no WASI port, and wasm's
+`call_indirect` needs each signature fixed at compile time anyway.
+[source/mizu/ffi/trampoline.d](source/mizu/ffi/trampoline.d) therefore generates, with CTFE, one
+trampoline per signature, each casting the function pointer to that signature and calling it.
+This replaces the C++ version's external generator (`ffi/wasm/generator.cpp.in`).
+
+Only how a value is passed matters, so arguments fall into four classes (32 bit integer, 64 bit
+integer, `float`, `double`) and results into six (adding `void` and the sign of a 32 bit result,
+which is sign extended into the register as libffi does); pointers join whichever integer class
+`size_t` does. Each argument more multiplies the table by four, so it is capped at
+`mizu.config.maximumTrampolineArguments`, 4 by default, which compiles in 2046 trampolines;
+`createInterface` treats a longer signature as fatal. On wasm a wrong signature traps in
+`call_indirect` instead of corrupting anything.
+
+The backend is also portable C ABI code, so `-version=MizuFFITrampolines` uses it on native
+targets too, without linking libffi, which is how the two backends are checked against each other.
+Function pointers have to come from the host on WASI, which has no dynamic loader: put them in a
+register before running the program, as the examples in `mizu.ffi.instructions` do.
 
 ## Notes on the port
 
@@ -385,12 +452,6 @@ libfp's internal `__fp_realloc(p, size, n)`; libfp's D API only takes the elemen
 template parameter, so a runtime element size has to become a total byte count.
 
 ### Not ported
-
-**The WASM FFI trampoline.** The C++ FFI had a second backend for WebAssembly, built at compile
-time by a generator (`ffi/wasm/generator.cpp.in` in the C++ repository) that emitted a
-`calls.hpp`. That generator is a C++ program emitting C++, so there is nothing to translate;
-`mizu.ffi.instructions` binds libffi only. With `MizuNoLibFFI` set the type-stack instructions still work and the call instructions
-abort, so the shape is there if someone wants to fill it in.
 
 **`stack_load_f32`/`stack_store_f32`** and their `f64` counterparts, which were commented out in
 the C++ headers and never registered. Registers are raw 64-bit blobs, so `stackLoadU64` already

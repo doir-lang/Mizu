@@ -87,3 +87,32 @@ jobs:
             dub run -c "example-$example" --compiler=ldc2
           done
         shell: bash
+
+  wasi:
+    name: wasm32-wasi (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Threads need thread-local storage on wasm, which LDC releases up to 1.43 strip (ldc-developers/ldc#5268).
+          - name: threads
+            compiler: ldc-master
+            flags: ''
+          - name: single-threaded
+            compiler: ldc-latest
+            flags: --single-threaded
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dlang-community/setup-dlang@v1
+        with:
+          compiler: ${{ matrix.compiler }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 'lts/*'
+
+      - name: Run the tests under @emnapi/wasi-threads
+        run: python3 tools/wasi.py --node ${{ matrix.flags }}

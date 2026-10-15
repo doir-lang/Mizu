@@ -9,6 +9,8 @@
 */
 module mizu.ffi.libffi;
 
+static import mizu.config;
+
 @nogc nothrow:
 
 /// A libffi type descriptor.
@@ -43,8 +45,11 @@ version(X86_64) {
 	else private enum uint targetAbi = 1; // FFI_SYSV
 } else version(RISCV64) {
 	private enum uint targetAbi = 1; // FFI_SYSV
+} else static if (mizu.config.noLibFFI) {
+	// Nothing calls libffi without it, as on wasm, but this module is still compiled whenever its package is.
+	private enum uint targetAbi = 0;
 } else {
-	static assert(0, "mizu.ffi.libffi does not know FFI_DEFAULT_ABI for this target. Add it from your libffi's ffitarget.h, or build with -version=MizuNoFFI.");
+	static assert(0, "mizu.ffi.libffi does not know FFI_DEFAULT_ABI for this target. Add it from your libffi's ffitarget.h, or build with -version=MizuNoLibFFI or -version=MizuNoFFI.");
 }
 
 /// The calling convention libffi should assume, `FFI_DEFAULT_ABI` for the target.

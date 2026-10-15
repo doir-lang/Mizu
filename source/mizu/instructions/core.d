@@ -167,7 +167,7 @@ void* halt(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* debugPrint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto value = &registers[pc.a];
-	registers[pc.out_] = printf("u64 = %lu, i64 = %ld, f64 = %f, f32 = %f\n", *value, *cast(long*) value, *cast(double*) value, cast(double)*cast(float*) value);
+	registers[pc.out_] = printf("u64 = %llu, i64 = %lld, f64 = %f, f32 = %f\n", *value, *cast(long*) value, *cast(double*) value, cast(double)*cast(float*) value);
 	cast(void) fflush(stdout);
 	mixin(mizuNext);
 }
