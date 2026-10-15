@@ -1,7 +1,5 @@
 /**
-* The D port of the C++ `tests/bubble.cpp`: bubble sort 100 numbers that have
-* been copied onto Mizu's stack, then assert the result matches the expected
-* ordering.
+* The D port of the C++ `tests/bubble.cpp`: bubble sort 100 numbers that have been copied onto Mizu's stack, then assert the result matches the expected ordering.
 *
 * Run with: `dub run -c example-bubble --compiler=ldc2`
 */
@@ -28,8 +26,7 @@ immutable ulong[100] sorted = [
 ];
 
 extern(C) int main() {
-	// The array's address is only known at run time, so unlike the other
-	// examples this program cannot be a compile-time constant.
+	// The array's address is only known at run time, so unlike the other examples this program cannot be a compile-time constant.
 	Opcode[36] program = [
 		Opcode(&findLabel, 200).setImmediate(label2immediate("bub")),   // outer loop
 		Opcode(&findLabel, 201).setImmediate(label2immediate("innr")),  // inner loop

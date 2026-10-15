@@ -1,7 +1,5 @@
 /**
-* The D port of the C++ `tests/test.cpp`: a Mizu program that forks a thread,
-* has that thread call a host function through the FFI and compute Fibonacci
-* recursively, and passes the answer back over a channel.
+* The D port of the C++ `tests/test.cpp`: a Mizu program that forks a thread, has that thread call a host function through the FFI and compute Fibonacci recursively, and passes the answer back over a channel.
 *
 * Run with: `dub run -c example-threads --compiler=ldc2`
 */
@@ -21,8 +19,7 @@ immutable char[7] greeting = "Hello\0";
 immutable char[19] symbolName = "mizuExamplePrint\0";
 
 extern(C) int main() {
-	// Host pointers are only known at run time, so this program is built here
-	// rather than being a compile-time constant.
+	// Host pointers are only known at run time, so this program is built here rather than being a compile-time constant.
 	Opcode[57] program = [
 		Opcode(&findLabel, 200).setImmediate(label2immediate("thrd")),
 
@@ -69,11 +66,11 @@ extern(C) int main() {
 		Opcode(&loadImmediate, Registers.a(0)).setImmediate(1),
 		Opcode(&jumpTo, 0, Registers.ra),
 		Opcode(&stackPushImmediate, 0).setImmediate(24),
-		Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-		Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
-		Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+		Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+		Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 		Opcode(&stackStoreU64, 0, Registers.a(3), Registers.t(0)),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
 		Opcode(&subtract, Registers.a(2), Registers.a(0), Registers.t(0)),
@@ -85,11 +82,11 @@ extern(C) int main() {
 		Opcode(&add, Registers.a(0), Registers.a(3), 0),
 		Opcode(&jumpTo, Registers.ra, 202),
 		Opcode(&add, Registers.a(0), Registers.a(2), Registers.a(0)),
-		Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-		Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
-		Opcode(&stackLoadU64, Registers.a(2), Registers.t(0)),
+		Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+		Opcode(&stackLoadU64, Registers.a(2), Registers.t(0)),
+		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 		Opcode(&stackLoadU64, Registers.a(3), Registers.t(0)),
 		Opcode(&stackPopImmediate).setImmediate(24),
 		Opcode(&jumpTo, 0, Registers.ra),

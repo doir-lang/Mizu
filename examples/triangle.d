@@ -1,27 +1,13 @@
 /**
-* A Mizu program that opens a window and draws a triangle, without a single
-* line of D doing any of the work: GLFW is `dlopen`ed, every entry point is
-* resolved by name, and each call goes out through `mizu.ffi`.
+* A Mizu program that opens a window and draws a triangle, without a single line of D doing any of the work: GLFW is `dlopen`ed, every entry point is resolved by name, and each call goes out through `mizu.ffi`.
 *
-* The interesting part is that Mizu never links against GLFW or OpenGL. The
-* host executable knows nothing about either one — the running Mizu program
-* describes each signature with the `pushType*` instructions, turns it into an
-* interface, and calls the resolved pointer with `ffi.call`, exactly the way it
-* would `jumpTo` one of its own labels.
+* Mizu never links against GLFW or OpenGL, and the host executable knows nothing about either: the running Mizu program describes each signature with the `pushType*` instructions, turns it into an interface, and calls the resolved pointer with `call`, exactly the way it would `jumpTo` one of its own labels.
 *
-* The triangle itself is drawn with OpenGL 1.1 immediate mode
-* (`glBegin`/`glVertex2f`/`glEnd`) rather than a core-profile VAO and shader
-* pair. That is not how anyone should write OpenGL today, but this example is
-* about the FFI and not about OpenGL: immediate mode is seven opcodes per
-* vertex, where compiling a shader would bury the FFI under a hundred opcodes
-* of string and object juggling. GLFW hands out a compatibility context by
-* default, so the legacy entry points are there.
+* The triangle is drawn with OpenGL 1.1 immediate mode (`glBegin`/`glVertex2f`/`glEnd`) rather than a core-profile VAO and shader pair. That is not how anyone should write OpenGL today, but this example is about the FFI: immediate mode is seven opcodes per vertex, where compiling a shader would bury the FFI under a hundred opcodes of string juggling. GLFW hands out a compatibility context by default, so the legacy entry points are there.
 *
 * Run with: `dub run -c example-triangle --compiler=ldc2`
 *
-* Requires GLFW at run time (`libglfw.so.3`, `libglfw.3.dylib`, `glfw3.dll`)
-* and a display to open a window on. When either is missing the program says
-* so and halts rather than crashing.
+* Requires GLFW at run time (`libglfw.so.3`, `libglfw.3.dylib`, `glfw3.dll`) and a display to open a window on. When either is missing the program says so and halts rather than crashing.
 */
 module examples.triangle;
 
@@ -38,11 +24,7 @@ enum uint GL_COLOR_BUFFER_BIT = 0x0000_4000;
 /// `GL_TRIANGLES`, the primitive `glBegin` is asked for.
 enum uint GL_TRIANGLES = 0x0004;
 
-/**
-* Registers holding the GLFW entry points, plus libc's `puts` for the error
-* paths. Mizu has 256 registers and the examples use the high ones as
-* globals, so the whole program can refer to a function by a readable name.
-*/
+/// Registers holding the GLFW entry points, plus libc's `puts` for the error paths; the high registers serve as globals, so the program names each function readably.
 enum : Reg {
 	pInit = 100,              /// `int glfwInit(void)`
 	pCreateWindow,            /// `GLFWwindow* glfwCreateWindow(int, int, const char*, void*, void*)`
@@ -99,9 +81,7 @@ enum : Reg {
 	rHeight = 169,            /// Framebuffer height, as of this frame.
 }
 
-// Symbol and string constants. Each is named rather than written inline at its
-// use site because a name is loaded in two halves — a pointer does not fit in
-// one 32 bit immediate — and both halves have to describe the same address.
+// Symbol and string constants, named because each pointer loads in two 32 bit halves that must describe the same address.
 immutable libraryNames = ["libglfw.so.3", "libglfw.3.dylib", "glfw3.dll", "glfw"];
 
 immutable sInit = "glfwInit";
@@ -132,17 +112,13 @@ immutable errorWindow = "[mizu] glfwCreateWindow() failed.";
 extern(C) int main() {
 	printf("Drawing a triangle from Mizu; the window closes after %u frames.\n", frameCount);
 
-	// Every pointer below — the library names, the symbol names, the window
-	// title — is a host address, so unlike `examples/fib.d` this program has to
-	// be assembled at run time rather than living in read-only data.
+	// Every pointer below is a host address, so unlike `examples/fib.d` this program is assembled at run time.
 	Opcode[218] program = [
 		Opcode(&findLabel, rLoop).setImmediate(label2immediate("draw")),
 		Opcode(&findLabel, rDone).setImmediate(label2immediate("done")),
 		Opcode(&findLabel, rFail).setImmediate(label2immediate("fail")),
 
-		// --- Describe every signature this program calls through ------------
-		// The first type pushed is the return type; the rest are parameters.
-		// `createInterface` consumes the stack, so these can run back to back.
+		// --- Describe every signature: the first type pushed is the return type, and `createInterface` consumes the stack, so these run back to back.
 
 		// void()
 		Opcode(&pushTypeVoid),
@@ -210,10 +186,7 @@ extern(C) int main() {
 		Opcode(&pushTypeI32),
 		Opcode(&createInterface, ifVoid4I32),
 
-		// --- Find GLFW ------------------------------------------------------
-		// `loadFirstLibraryThatExists` reads its candidates out of the argument
-		// registers and keeps the first one that opens, trying each name both
-		// as given and with the platform's extension appended.
+		// --- Find GLFW: the first candidate in the argument registers that opens, with or without the platform's extension.
 		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(libraryNames[0].ptr),
 		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(libraryNames[0].ptr),
 		Opcode(&loadImmediate, Registers.a(1)).setHostPointerLowerImmediate(libraryNames[1].ptr),
@@ -224,8 +197,7 @@ extern(C) int main() {
 		Opcode(&loadUpperImmediate, Registers.a(3)).setHostPointerUpperImmediate(libraryNames[3].ptr),
 		Opcode(&loadFirstLibraryThatExists, rLibrary).setImmediate(cast(uint) libraryNames.length),
 
-		// `puts` comes out of the host process itself (library zero), and is
-		// how the failure paths below report what went wrong.
+		// `puts` comes out of the host process itself (library zero), and is how the failure paths below report what went wrong.
 		Opcode(&loadImmediate, Registers.t(0)).setHostPointerLowerImmediate(sPuts.ptr),
 		Opcode(&loadUpperImmediate, Registers.t(0)).setHostPointerUpperImmediate(sPuts.ptr),
 		Opcode(&loadLibraryFunction, pPuts, 0, Registers.t(0)),
@@ -277,8 +249,7 @@ extern(C) int main() {
 		Opcode(&loadUpperImmediate, Registers.t(0)).setHostPointerUpperImmediate(sGetFramebufferSize.ptr),
 		Opcode(&loadLibraryFunction, pGetFramebufferSize, rLibrary, Registers.t(0)),
 
-		// --- Bring up the window --------------------------------------------
-		// if (!glfwInit()) fail("glfwInit() failed")
+		// --- Bring up the window: if (!glfwInit()) fail("glfwInit() failed")
 		Opcode(&callWithReturn, Registers.t(0), pInit, ifI32),
 		Opcode(&setIfEqual, Registers.t(0), Registers.t(0), 0),
 		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(errorInit.ptr),
@@ -306,9 +277,7 @@ extern(C) int main() {
 		Opcode(&loadImmediate, Registers.a(0)).setImmediate(1),
 		Opcode(&call, 0, pSwapInterval, ifVoidI32),
 
-		// --- Resolve OpenGL itself ------------------------------------------
-		// Only now that a context is current, and through GLFW rather than a
-		// second `loadLibrary`: the driver decides where these actually live.
+		// --- Resolve OpenGL through GLFW, now that a context is current, since the driver decides where these live.
 		Opcode(&loadImmediate, Registers.a(0)).setHostPointerLowerImmediate(sClearColor.ptr),
 		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(sClearColor.ptr),
 		Opcode(&callWithReturn, pClearColor, pGetProcAddress, ifPtrPtr),
@@ -337,9 +306,7 @@ extern(C) int main() {
 		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(sViewport.ptr),
 		Opcode(&callWithReturn, pViewport, pGetProcAddress, ifPtrPtr),
 
-		// glClearColor(0.06, 0.07, 0.11, 1.0)
-		// Mizu registers are raw 64 bit blobs, so an f32 argument is just the
-		// float's bit pattern sitting in the low half of an argument register.
+		// glClearColor(0.06, 0.07, 0.11, 1.0); an f32 argument is the float's bit pattern in an argument register's low half.
 		Opcode(&loadImmediate, Registers.a(0)).setImmediateF32(0.06f),
 		Opcode(&loadImmediate, Registers.a(1)).setImmediateF32(0.07f),
 		Opcode(&loadImmediate, Registers.a(2)).setImmediateF32(0.11f),
@@ -360,19 +327,14 @@ extern(C) int main() {
 			Opcode(&setIfGreaterEqual, Registers.t(0), rFrame, rFrameCount),
 			Opcode(&branchTo, 0, Registers.t(0), rDone),
 
-			// glfwGetFramebufferSize(window, &width, &height)
-			// The two out parameters are Mizu's own registers: `pointerToRegister`
-			// hands their addresses straight to GLFW, which writes a 32 bit int
-			// into the low half of each, so both are cleared first.
+			// glfwGetFramebufferSize(window, &width, &height), writing 32 bit ints into the low halves of two cleared Mizu registers.
 			Opcode(&loadImmediate, rWidth).setImmediate(0),
 			Opcode(&loadImmediate, rHeight).setImmediate(0),
 			Opcode(&add, Registers.a(0), rWindow, 0),
 			Opcode(&pointerToRegister, Registers.a(1), rWidth),
 			Opcode(&pointerToRegister, Registers.a(2), rHeight),
 			Opcode(&call, 0, pGetFramebufferSize, ifVoid3Ptr),
-			// glViewport(0, 0, width, height), because a window manager is free
-			// to hand back a size other than the one asked for, and to resize
-			// the window afterwards.
+			// glViewport(0, 0, width, height), since the window manager may resize the window at any time.
 			Opcode(&loadImmediate, Registers.a(0)).setImmediate(0),
 			Opcode(&loadImmediate, Registers.a(1)).setImmediate(0),
 			Opcode(&add, Registers.a(2), rWidth, 0),
@@ -424,9 +386,7 @@ extern(C) int main() {
 			Opcode(&add, rFrame, rFrame, rOne),
 			Opcode(&jumpTo, 0, rLoop),
 
-		// --- Shut down --------------------------------------------------------
-		// `glfwTerminate` destroys the window for us, so there is nothing left
-		// to release but the interfaces Mizu itself allocated.
+		// --- Shut down: `glfwTerminate` destroys the window, leaving only the interfaces Mizu allocated to release.
 		Opcode(&label).setImmediate(label2immediate("done")),
 		Opcode(&call, 0, pTerminate, ifVoid),
 		Opcode(&freeInterface, 0, ifVoid, 0),
@@ -445,8 +405,7 @@ extern(C) int main() {
 		Opcode(&debugPrint, 0, rFrame),
 		Opcode(&halt),
 
-		// Every failure path arrives here with `a0` already pointing at the
-		// message explaining what went wrong.
+		// Every failure path arrives here with `a0` already pointing at the message explaining what went wrong.
 		Opcode(&label).setImmediate(label2immediate("fail")),
 		Opcode(&call, 0, pPuts, ifI32Ptr),
 		Opcode(&halt),

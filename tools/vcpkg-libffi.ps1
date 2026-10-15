@@ -1,7 +1,7 @@
 #!/usr/bin/env pwsh
 #
 # Builds libffi for Windows with vcpkg and stages it as .vcpkg/lib/ffi.lib,
-# which is where dub.json's `lflags-windows` and tools/coverage.sh look.
+# which is where dub.json's `lflags-windows` and tools/coverage.py look.
 #
 # Windows ships no libffi, so vcpkg builds one from source. The default
 # triplet links it statically against the *dynamic* CRT, which is what LDC

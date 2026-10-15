@@ -1,18 +1,13 @@
 /**
-* Thin wrapper over the platform's dynamic loader (`dlopen`/`dlsym` on POSIX,
-* `LoadLibrary`/`GetProcAddress` on Windows).
+* Thin wrapper over the platform's dynamic loader (`dlopen`/`dlsym` on POSIX, `LoadLibrary`/`GetProcAddress` on Windows).
 *
-* The C++ original signalled failure by throwing `mizu::loader::error`, and
-* `load_first_that_exists` caught it in a loop. `-betterC` has no exceptions,
-* so every function here returns null on failure and leaves the reason in
-* `lastError`, which is what lets `loadFirstThatExists` keep its "try each in
-* turn" behaviour without a `try`/`catch`.
+* `-betterC` has no exceptions, so where the C++ original threw, every function here returns null or false and leaves the reason in `lastError`, which is what lets `loadFirstThatExists` try each path in turn.
 */
 module mizu.ffi.loader;
 
-import fp.string : makeDynamicSlice, concatenateSlice, stringFree = free;
+static import fp.string;
 
-import mizu.config : dynamicLoadingSupported;
+static import mizu.config;
 
 @nogc nothrow:
 
@@ -26,7 +21,15 @@ version(Posix) {
 /// An opaque handle to a loaded shared library.
 struct Library;
 
-/// The reason the most recent call failed, or null. Not thread safe.
+/**
+* The reason the most recent call failed, or null. Not thread safe.
+*
+* Examples:
+* ---
+* assert(loadShared("") is null);
+* assert(lastError !is null);
+* ---
+*/
 __gshared const(char)* lastError = null;
 
 private void* fail(const(char)* reason) {
@@ -34,8 +37,7 @@ private void* fail(const(char)* reason) {
 	return null;
 }
 
-/// The platform's extension for shared libraries, including the dot. `.so` is
-/// every Posix but Darwin, so it is the fallthrough rather than a list.
+/// The platform's extension for shared libraries, including the dot; `.so` is every Posix but Darwin.
 version(OSX) enum string sharedLibraryExtension = ".dylib";
 else version(Windows) enum string sharedLibraryExtension = ".dll";
 else version(Posix) enum string sharedLibraryExtension = ".so";
@@ -47,31 +49,34 @@ else enum string sharedLibraryExtension = "";
 * Params:
 *   path = path to the library; most platforms also search their library path
 *   appendPlatformDecorator = append `sharedLibraryExtension` to `path` first
-* Returns: the library, or null (see `lastError`).
+* Returns: the library, to release with `close`, or null (see `lastError`).
+*
+* Examples:
+* ---
+* version(linux) {
+* 	Library* c = loadShared("libc.so.6");
+* 	assert(c !is null);
+* 	assert(close(c));
+* }
+* assert(loadShared("mizu_definitely_not_a_library", true) is null);
+* ---
 */
 Library* loadShared(scope const(char)[] path, bool appendPlatformDecorator = false) @trusted {
-	static if (!dynamicLoadingSupported)
+	static if (!mizu.config.dynamicLoadingSupported)
 		return cast(Library*) fail("Dynamic loading is not supported on this platform.");
 	else {
-		// dlopen/LoadLibraryA want a C string, and `path` may be a slice, so
-		// build the (optionally decorated) name as a libfp string. libfp keeps
-		// the byte past the end of a string zeroed, so it is already NUL
-		// terminated; an empty one is null, which `dlopen` would read as "the
-		// current executable", hence the length check.
+		// An empty path would become a null name, which `dlopen` reads as the current executable rather than failing.
 		if (path.length == 0)
 			return cast(Library*) fail("Library path is empty.");
 
-		char* name = makeDynamicSlice(path);
+		// libfp strings are NUL terminated, so this is the C string the platform wants.
+		char* name = fp.string.makeDynamic(path);
 		if (name is null)
 			return cast(Library*) fail("Failed to allocate the library's path.");
-		scope(exit) stringFree(name);
+		scope(exit) fp.string.free(name);
 
-		if (appendPlatformDecorator && sharedLibraryExtension.length)
-			concatenateSlice(name, sharedLibraryExtension);
-		// `concatenateSlice` only ever grows `name`, so this holds; it is
-		// worth stating because `dlopen(null)` does not fail, it loads the
-		// current executable, which would be a silent wrong answer.
-		assert(name !is null);
+		if (appendPlatformDecorator && sharedLibraryExtension.length && fp.string.concatenate(name, sharedLibraryExtension) is null)
+			return cast(Library*) fail("Failed to allocate the library's path.");
 
 		version(Posix) {
 			auto result = dlopen(name, RTLD_LAZY);
@@ -93,7 +98,15 @@ alias loadLibrary = loadShared;
 /**
 * Tries each path in turn and returns the first library that loads.
 *
-* Returns: the library, or null (see `lastError`).
+* Returns: the library, to release with `close`, or null (see `lastError`).
+*
+* Examples:
+* ---
+* static immutable const(char)[][3] names = ["libc.so.6", "libSystem.B.dylib", "msvcrt"];
+* Library* c = loadFirstThatExists(names[]);
+* assert(c !is null);
+* assert(close(c));
+* ---
 */
 Library* loadFirstThatExists(scope const(const(char)[])[] paths, bool appendPlatformDecorator = false) {
 	foreach (path; paths)
@@ -103,16 +116,18 @@ Library* loadFirstThatExists(scope const(const(char)[])[] paths, bool appendPlat
 }
 
 /**
-* Loads the currently running executable, so `lookup` can find symbols the
-* host application itself exports.
+* Loads the currently running executable, so `lookup` can find symbols the host application itself exports.
 *
-* Note:
-*   On POSIX the host must be linked with `--export-dynamic` for its symbols
-*   to be visible. Windows has no equivalent of `dlopen(null)`, so the
-*   executable's own path is looked up and loaded by name instead; only the
-*   symbols it explicitly exports are visible.
+* Note: on POSIX the host must be linked with `--export-dynamic` for its symbols to be visible. Windows has no `dlopen(null)`, so the executable is loaded by its own path instead, and only the symbols it explicitly exports are visible.
 *
-* Returns: the library, or null (see `lastError`).
+* Returns: the library, to release with `close`, or null (see `lastError`).
+*
+* Examples:
+* ---
+* Library* self = loadCurrentExecutable();
+* assert(self !is null);
+* assert(close(self));
+* ---
 */
 Library* loadCurrentExecutable() @trusted {
 	version(Posix) {
@@ -120,9 +135,7 @@ Library* loadCurrentExecutable() @trusted {
 		if (result is null) return cast(Library*) fail(dlerror());
 		return cast(Library*) result;
 	} else version(Windows) {
-		// The executable is already in the process, so loading it by name just
-		// hands back its module handle (with one more reference, which keeps
-		// `close` symmetrical with the other loaders).
+		// Loading the running executable by name hands back its module handle with one more reference, keeping `close` symmetrical.
 		char[1024] buffer;
 		immutable length = GetModuleFileNameA(null, buffer.ptr, cast(uint) buffer.length);
 		if (length == 0 || length >= buffer.length)
@@ -143,25 +156,30 @@ Library* loadCurrentExecutable() @trusted {
 *   name = the symbol's (mangled) name
 *   library = the library to search, or null for the current executable
 * Returns: the symbol's address, or null (see `lastError`).
+*
+* Examples:
+* ---
+* static immutable const(char)[][3] names = ["libc.so.6", "libSystem.B.dylib", "msvcrt"];
+* Library* c = loadFirstThatExists(names[]);
+* scope(exit) cast(void) close(c);
+* assert(lookup("malloc", c) !is null);
+* assert(lookup("mizu_definitely_not_a_symbol", c) is null);
+* ---
 */
 void* lookup(scope const(char)* name, Library* library = null) @trusted {
-	static if (!dynamicLoadingSupported)
+	static if (!mizu.config.dynamicLoadingSupported)
 		return fail("Dynamic loading is not supported on this platform.");
 	else version(Posix) {
-		// A null library means "search the whole process", which `dlsym`
-		// spells as `RTLD_DEFAULT`. glibc defines that as a null handle, so
-		// the argument passes straight through; macOS defines it as
-		// `(void*) -2` and rejects a genuinely null handle outright.
+		// `RTLD_DEFAULT` searches the whole process: a null handle on glibc, but `(void*) -2` on macOS, which rejects null outright.
 		version(OSX) enum searchEverything = cast(Library*) -2;
 		else enum searchEverything = cast(Library*) null;
 
-		dlerror(); // Clear any stale error so ours is the only one we can see.
+		cast(void) dlerror(); // Clear any stale error so ours is the only one we can see.
 		auto result = dlsym(library is null ? searchEverything : library, name);
 		if (auto error = dlerror()) return fail(error);
 		return result;
 	} else version(Windows) {
-		// `loadCurrentExecutable` hands back a reference of its own, so release
-		// it again rather than leaking one per lookup.
+		// `loadCurrentExecutable` hands back a reference of its own, so release it rather than leaking one per lookup.
 		auto handle = cast(HMODULE) library;
 		if (handle is null) {
 			auto self = loadCurrentExecutable();
@@ -169,19 +187,28 @@ void* lookup(scope const(char)* name, Library* library = null) @trusted {
 			handle = cast(HMODULE) self;
 		}
 		auto result = GetProcAddress(handle, name);
-		if (library is null) FreeLibrary(handle);
+		// Only drops the reference taken just above, which cannot fail.
+		if (library is null) cast(void) FreeLibrary(handle);
 		if (result is null) return fail("Failed to find function.");
 		return cast(void*) result;
 	}
 }
 
-/// Closes a library. Returns false on failure (see `lastError`).
+/**
+* Closes a library a loader in this module returned. Returns false on failure (see `lastError`).
+*
+* Examples:
+* ---
+* Library* self = loadCurrentExecutable();
+* assert(close(self));
+* ---
+*/
 bool close(Library* library) @trusted {
-	static if (!dynamicLoadingSupported)
+	static if (!mizu.config.dynamicLoadingSupported)
 		return cast(bool) fail("Dynamic loading is not supported on this platform.");
 	else version(Posix) {
-		dlerror();
-		dlclose(library);
+		cast(void) dlerror();
+		cast(void) dlclose(library);
 		if (auto error = dlerror()) { lastError = error; return false; }
 		return true;
 	} else version(Windows) {
@@ -194,23 +221,19 @@ bool close(Library* library) @trusted {
 }
 
 version(unittest) {
+	static import fp.pointer;
+
 	/**
-	* A symbol for `loadCurrentExecutable`'s test to look up.
+	* A symbol for `loadCurrentExecutable`'s test to look up; Windows exposes only an executable's exports, and POSIX this too through `--export-dynamic`.
 	*
-	* Windows exposes only what an executable's export table names, so
-	* `loadCurrentExecutable` there can find nothing unless something is
-	* exported; POSIX publishes this alongside everything else through
-	* `--export-dynamic`, so one symbol serves both.
+	* Examples:
+	* ---
+	* mizuLoaderTestSymbol();
+	* ---
 	*/
 	export extern(C) void mizuLoaderTestSymbol() {}
 
-	/**
-	* Names the C library answers to, in the order worth trying.
-	*
-	* Every platform has one, and none of these is a real path, so a test
-	* using them exercises the loader's own search rather than just opening a
-	* file it was handed.
-	*/
+	// Names the C library answers to, none a real path, so tests exercise the loader's own search.
 	version(Windows)
 		private immutable const(char)[][2] cRuntimeNames = ["msvcrt", "ucrtbase"];
 	else
@@ -219,14 +242,11 @@ version(unittest) {
 }
 
 unittest {
-	// The C library is present under at least one of these names everywhere
-	// this test runs. Both spellings are tried unconditionally so the
-	// decorated path is exercised even on the platforms where the undecorated
-	// one already works.
+	// Both spellings are tried, so the decorated path runs even where the undecorated one already works.
 	auto plain = loadFirstThatExists(cRuntimeNames[], false);
 	auto decorated = loadFirstThatExists(cRuntimeNames[], true);
-	scope(exit) if (plain !is null) close(plain);
-	scope(exit) if (decorated !is null) close(decorated);
+	scope(exit) if (plain !is null) assert(close(plain));
+	scope(exit) if (decorated !is null) assert(close(decorated));
 
 	auto library = plain !is null ? plain : decorated;
 	assert(library !is null);
@@ -238,9 +258,7 @@ unittest {
 }
 
 unittest {
-	// Every way of failing to load a library: a name that is not one, the
-	// same with the platform's extension appended, an empty path, and a list
-	// in which nothing works.
+	// Every way of failing to load a library: a bad name, with and without the extension, an empty path, and a hopeless list.
 	assert(loadShared("mizu_definitely_not_a_library", false) is null);
 	assert(lastError !is null);
 	assert(loadShared("mizu_definitely_not_a_library", true) is null);
@@ -256,22 +274,17 @@ unittest {
 }
 
 unittest {
-	// The allocation for the library's path being refused. `loadShared` has
-	// to build a NUL terminated copy of `path` before it can hand it to the
-	// platform, and libfp's allocator is a plain global, so the failure can be
-	// staged rather than waited for.
-	import fp.pointer : allocFunction, AllocFunction;
-
-	static AllocFunction previous;
+	// libfp's allocator is a plain global, so refusing the copy of the library's path can be staged.
+	static fp.pointer.AllocFunction previous;
 	static void* refuse(void* p, size_t size) @nogc nothrow {
 		if (size == 0) return previous(p, 0); // Still let callers clean up.
 		return null;
 	}
 
-	previous = allocFunction;
-	allocFunction = &refuse;
+	previous = fp.pointer.allocFunction;
+	fp.pointer.allocFunction = &refuse;
 	auto library = loadShared("libc.so.6", false);
-	allocFunction = previous;
+	fp.pointer.allocFunction = previous;
 
 	assert(library is null);
 	assert(lastError !is null);
@@ -279,24 +292,18 @@ unittest {
 
 version(Windows)
 unittest {
-	// `close` failing. `FreeLibrary` rejects a null module handle and says so,
-	// which is the only way to reach that branch without corrupting something
-	// real. POSIX has no equivalent: `dlclose` of a handle it never issued is
-	// undefined rather than an error, so this stays Windows only.
+	// `FreeLibrary` rejects a null handle, but POSIX `dlclose` of a foreign handle is undefined, so only Windows can test failing to close.
 	assert(!close(null));
 	assert(lastError !is null);
 }
 
 unittest {
-	// The host executable loads by itself, and its own exported symbols are
-	// visible through it — which is what lets the FFI call into the host.
+	// The host executable loads by itself, and its exported symbols are visible through it, which lets the FFI call into the host.
 	auto self = loadCurrentExecutable();
 	assert(self !is null);
-	scope(exit) close(self);
+	scope(exit) assert(close(self));
 	assert(lookup("mizuLoaderTestSymbol", self) !is null);
 
-	// A null library means the same thing, reached by a different route on
-	// Windows (there is no `dlopen(null)`, so `lookup` loads the executable
-	// itself and releases it again).
+	// A null library means the same thing, though Windows `lookup` reaches it by loading and releasing the executable itself.
 	assert(lookup("mizuLoaderTestSymbol", null) !is null);
 }

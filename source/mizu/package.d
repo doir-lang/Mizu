@@ -2,7 +2,7 @@
 module mizu;
 
 public import mizu.config;
-public import mizu.exception;
+public import mizu.error;
 public import mizu.opcode;
 public import mizu.instructions;
 public import mizu.lookup;
