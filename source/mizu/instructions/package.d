@@ -1,9 +1,7 @@
 /**
-* Pulls in every instruction module, the way `mizu/instructions.hpp` used to
-* include every instruction header.
+* Pulls in every instruction module, the way `mizu/instructions.hpp` used to include every instruction header.
 *
-* The FFI instructions are deliberately $(I not) here: they are an optional
-* extra with a libffi dependency, so `import mizu.ffi;` separately.
+* The FFI instructions are deliberately $(I not) here: they are an optional extra with a libffi dependency, so `import mizu.ffi;` separately.
 */
 module mizu.instructions;
 

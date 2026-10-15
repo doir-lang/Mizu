@@ -139,9 +139,11 @@ does not link the test suite at all — it emits calls to druntime helpers (`_me
 `core.bitop.byteswap`) that `-betterC` then refuses to link against — and even if it did, it
 performs no tail call optimization, so the dispatch described under [Tail calls](#tail-calls)
 would overflow the stack on the first loop of any size. That applies to the coverage build too, so
-`DC=dmd tools/coverage.sh` reports the same error rather than dying partway through the run.
+`DC=dmd python3 tools/coverage.py` reports the same error rather than dying partway through the run.
 `-version=MizuAllowDMD` lowers the error back to a warning, for tools that only analyse these
-sources — `dmd -o-` syntax checks, ddoc — and never run what they build.
+sources — `dmd -o-` syntax checks, ddoc — and never run what they build. libfp, which Mizu
+depends on through bc-threads, refuses DMD the same way, so such a run also needs
+`-version=FpAllowDMD`.
 
 ### libffi on Windows
 
@@ -156,7 +158,7 @@ tools/vcpkg-libffi.ps1
 The script installs what [vcpkg.json](vcpkg.json) asks for, using whichever vcpkg it can find
 (`VCPKG_ROOT`, `VCPKG_INSTALLATION_ROOT`, or one on `PATH`) and cloning one into `.vcpkg/vcpkg`
 if there is none. It then stages the result as `.vcpkg/lib/ffi.lib`, which is where
-`lflags-windows` in [dub.json](dub.json) and [tools/coverage.sh](tools/coverage.sh) point the
+`lflags-windows` in [dub.json](dub.json) and [tools/coverage.py](tools/coverage.py) point the
 linker. Run it again whenever you want a newer libffi; it is otherwise a one-time step, and
 everything it writes is git-ignored.
 
@@ -182,8 +184,8 @@ and the test count. Build and run the binary yourself, as above, to see how much
 ### Coverage
 
 ```sh
-tools/coverage.sh        # per-module summary
-tools/coverage.sh -v     # ... and every uncovered line
+python3 tools/coverage.py        # per-module summary
+python3 tools/coverage.py -v     # ... and every uncovered line
 ```
 
 `-cov` records its line counts through druntime, which `-betterC` does not have, so the script
@@ -217,6 +219,52 @@ a locked mutex is therefore waiting for a release that can never arrive: reachin
 means hanging on it. The try-lock instructions have no such problem — they report the refusal and
 carry on — and they are covered.
 
+### Profiling
+
+```sh
+DFLAGS="--frame-pointer=all" dub build -c example-fib --compiler=ldc2 --build=release-debug
+perf record -F max --call-graph fp -e cpu_core/cycles/ -- ./bin/fib   # the program to profile
+perf script --no-inline > perf.script
+~/Dev/Packages/FlameGraph/stackcollapse-perf.pl perf.script > perf.folded
+~/Dev/Packages/FlameGraph/flamegraph.pl perf.folded > perf.svg
+```
+
+`dub` appends `DFLAGS` to the build type's flags rather than replacing them, so the build keeps
+its `-O3` and with it the tail calls.
+
+`--frame-pointer=all` is what makes the profile readable, and it is not optional:
+`--call-graph dwarf` against a build without it unwinds almost nothing to a real stack, leaves
+most samples with no frames at all, throttles the sample period under the cost of copying
+stacks, and writes gigabytes of `perf.data`. With frame pointers in the binary,
+`--call-graph fp` needs none of that copying.
+
+Expect a flat graph. Each instruction tail-calls the next, replacing its frame, so every
+instruction shows up as a direct child of whatever called `startFromEnvironment` (in the
+examples, `main`, which it is inlined into). The graph says what each instruction costs, not
+which Mizu-level call path it ran on; that path lives in Mizu's registers and stack, where perf
+cannot see it.
+
+`-F max` because the examples are short: `fib` finishes in about 25ms, which at perf's default
+rate is under twenty samples. Raise `target` in [examples/fib.d](examples/fib.d) for a longer
+run.
+
+`--no-inline` keeps `perf script` from expanding each address into the functions inlined there.
+Without it, helpers such as `mizu.opcode.immediate` appear as children of the instruction that
+inlined them, and the root of every stack is misattributed from `_start` to an unrelated inlined
+function. Drop it when you want to see the inlined helpers.
+
+`-e cpu_core/cycles/` because a hybrid CPU otherwise reports `cpu_atom` and `cpu_core` as two
+events with their own sample periods, and anything that sums raw sample counts across them is
+measuring nothing. On a CPU without separate core types, use `-e cycles`.
+
+Check `kernel.perf_event_paranoid` before reading any of the numbers. At the default of 2 a run
+can land a large share of its cycles on a single unresolvable `0xffffffff...` address, and that
+time is simply invisible; `sudo sysctl kernel.perf_event_paranoid=1` attributes it.
+
+`perf.script` for a run of any size is gigabytes, so stream it with `awk` rather than loading it,
+and weight each sample by the period in its header line: once perf has throttled, that period is
+not constant, and treating every sample as one unit silently reweights the profile.
+
 ## Tail calls
 
 Mizu dispatches each instruction by tail-calling the next one, so a program of any length runs
@@ -238,8 +286,8 @@ So the port relies on LLVM's ordinary tail call optimization, which means:
 | DMD | any | **stack overflow** — DMD does not tail-call at all |
 
 `dub.json` therefore overrides the `debug` and `unittest` build types to add `optimize`, so
-`dub build` and `dub test` cannot accidentally produce a broken VM, and `mizu.opcode` emits a
-compile-time warning under DMD. If you build Mizu by hand, pass `-O2`.
+`dub build` and `dub test` cannot accidentally produce a broken VM, and `mizu.opcode` refuses DMD at
+compile time. If you build Mizu by hand, pass `-O2`.
 
 This is a narrower window than the C++ version's, which is why it is called out here rather
 than buried: the C++ README warned that MSVC and avr-gcc would produce programs that crash, and
@@ -259,7 +307,7 @@ Boolean knobs are D `version` identifiers, which `dub` can set for you:
 | `MizuEnableTracing` | Every instruction prints its name and operands as it runs. |
 | `MizuNoFFI` | Drop the FFI entirely, and with it the libffi dependency. |
 | `MizuNoLibFFI` | Keep the FFI instructions but bind no backend; the call instructions abort. |
-| `MizuAllowDMD` | Let DMD compile these sources, for tools that only analyse them. See [Building this repository](#building-this-repository). |
+| `MizuAllowDMD` | Let DMD compile these sources, for tools that only analyse them; pair it with libfp's `FpAllowDMD`. See [Building this repository](#building-this-repository). |
 
 D has no equivalent of `-DNAME=value`, so the two numeric knobs that used to be CMake cache
 variables are `enum`s in [source/mizu/config.d](source/mizu/config.d):
@@ -303,7 +351,7 @@ with that registration — a downstream project adding instructions of its own �
 from `mizu.lookup.Lookup` being a template the downstream instantiates with its own modules; see
 [Adding your own instructions](#adding-your-own-instructions).
 
-**Exceptions are gone.** `MIZU_THROW` becomes `mizu.exception.fatal`, which prints to `stderr`
+**Exceptions are gone.** `MIZU_THROW` becomes `mizu.error.fatal`, which prints to `stderr`
 and aborts. The dynamic loader, which used a `try`/`catch` to implement "try each of these
 libraries", now returns null and records `mizu.ffi.loader.lastError`.
 

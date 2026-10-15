@@ -1,6 +1,5 @@
 /**
-* The D port of the C++ `tests/fib.cpp`: recursive Fibonacci, computed by a
-* Mizu program that saves and restores registers on Mizu's own stack.
+* The D port of the C++ `tests/fib.cpp`: recursive Fibonacci, computed by a Mizu program that saves and restores registers on Mizu's own stack.
 *
 * Run with: `dub run -c example-fib --compiler=ldc2`
 */
@@ -32,11 +31,11 @@ immutable Opcode[32] fibHead = [
 	Opcode(&jumpTo, 0, Registers.ra),
 	// save ra, a2, a3
 	Opcode(&stackPushImmediate, 0).setImmediate(24),
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-	Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
-	Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+	Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+	Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 	Opcode(&stackStoreU64, 0, Registers.a(3), Registers.t(0)),
 	// a2 = a0 - 1
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
@@ -54,15 +53,15 @@ immutable Opcode[32] fibHead = [
 	// a0 = a2 + a0
 	Opcode(&add, Registers.a(0), Registers.a(2), Registers.a(0)),
 	// restore ra, a2, a3
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-	Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
+	Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
 	Opcode(&stackLoadU64, Registers.a(2), Registers.t(0)),
 ];
 
 /// Ditto
 immutable Opcode[4] fibTail = [
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 	Opcode(&stackLoadU64, Registers.a(3), Registers.t(0)),
 	Opcode(&stackPopImmediate).setImmediate(24),
 	Opcode(&jumpTo, 0, Registers.ra), // return

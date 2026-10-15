@@ -1,39 +1,17 @@
 /**
-* Maps instructions between their names, their function pointers, and the
-* small integer IDs the serializers write to disk.
+* Maps instructions between their names, their function pointers, and the small integer IDs the serializers write to disk.
 *
-* The C++ original built three `std::unordered_map`s at program startup: each
-* instruction header declared a `bool <name>_registered` whose initializer
-* called `register_instruction`. `-betterC` has no static constructors, so
-* that trick is unavailable — and unnecessary. D can enumerate the
-* instructions at compile time with `__traits(allMembers)`, so the table
-* below is built during compilation and lives in read-only data. Nothing is
-* allocated, nothing runs before `main`, and the C++
-* `release_lookup_data()` has no counterpart because there is nothing to
-* release.
+* The C++ original built three `std::unordered_map`s at program startup, each instruction header registering itself from a static initializer. `-betterC` has no static constructors, and needs none: D enumerates the instructions at compile time with `__traits(allMembers)`, so the table is built during compilation and lives in read-only data. Nothing is allocated, nothing runs before `main`, and there is nothing to release.
 *
-* An instruction's ID is its index in that table, which makes IDs stable for
-* a given build instead of depending on static initialization order across
-* translation units.
+* An instruction's ID is its index in that table, which makes IDs stable for a given build instead of depending on static initialization order across translation units.
 *
 * $(H3 Names)
 *
-* Unlike the C++ original, which registered each instruction under its bare
-* identifier, the table stores fully qualified names:
-* `mizu.instructions.core.add`, not `add`. Two packages may then both declare
-* an `add` without one shadowing the other, and a name is enough on its own
-* to say where the instruction came from — which is what lets
-* `mizu.portable_format.generateSourceFile` emit a file that imports exactly
-* the modules the program needs. It is also what `__FUNCTION__` expands to,
-* so a table name and the name a traced instruction prints under
-* `MizuEnableTracing` are now the same string. `lookupId` still accepts a
-* bare name for convenience; see `unqualifiedName` and `moduleOfName` to take
-* a stored name apart.
+* The table stores fully qualified names: `mizu.instructions.core.add`, not `add`. Two packages may then both declare an `add` without one shadowing the other, and a name alone says where the instruction came from, which is what lets `mizu.portable_format.generateSourceFile` import exactly the modules a program needs. It is also what `__FUNCTION__` expands to, so a table name matches what a traced instruction prints under `MizuEnableTracing`. `lookupId` still accepts a bare name for convenience; see `unqualifiedName` and `moduleOfName` to take a stored name apart.
 *
 * $(H3 Adding your own instructions)
 *
-* The table is a template, `Lookup`, so a project that defines instructions
-* of its own can build a table that knows about them too:
+* The table is a template, `Lookup`, so a project that defines instructions of its own can build a table that knows about them too:
 *
 * ---
 * module myproject.instructions;
@@ -42,44 +20,28 @@
 * alias myLookup = Lookup!(myproject.instructions);
 * ---
 *
-* `myLookup` has the same members as this module's, with your instructions
-* appended after Mizu's, so Mizu's own IDs are untouched and yours start at
-* `myLookup.builtinCount`. Hand it to the serializers to make them resolve
-* both halves — `fromBinary!myLookup(blob)`, `toPortable!myLookup(program)`
-* and so on; every function in `mizu.serialize` and `mizu.portable_format`
-* takes a lookup as its first template argument and defaults to `Lookup!()`.
+* `myLookup` has the same members as this module's, with your instructions appended after Mizu's, so Mizu's own IDs are untouched and yours start at `myLookup.builtinCount`. Hand it to the serializers to make them resolve both halves: `fromBinary!myLookup(blob)`, `toPortable!myLookup(program)` and so on; every function in `mizu.serialize` and `mizu.portable_format` takes a lookup as its first template argument and defaults to `Lookup!()`.
 *
-* This has to be a template rather than, say, a list of extra modules
-* `mizu.lookup` imports: Mizu is usually compiled as its own static library,
-* long before your instructions exist. A template is instantiated in *your*
-* compilation instead, where the compiler can see both halves, and the
-* resulting table is still built entirely at compile time.
+* This has to be a template rather than a list of extra modules `mizu.lookup` imports: Mizu is usually compiled as its own static library, long before your instructions exist. A template is instantiated in $(I your) compilation instead, where the compiler can see both halves, and the resulting table is still built entirely at compile time.
 *
-* Warning:
-*   IDs still describe one build configuration. Adding, removing or
-*   reordering instructions renumbers everything after the change, so a
-*   serialized program can only be loaded by a build with the same
-*   instruction set. FFI instructions are placed last of Mizu's own so that
-*   turning the FFI on or off leaves the core instruction IDs untouched;
-*   extra instructions follow them, so a program that uses extras must be
-*   loaded by a build that agrees about the FFI as well.
+* Warning: IDs still describe one build configuration. Adding, removing or reordering instructions renumbers everything after the change, so a serialized program can only be loaded by a build with the same instruction set. FFI instructions are placed last of Mizu's own so that turning the FFI on or off leaves the core instruction IDs untouched; extra instructions follow them, so a program that uses extras must be loaded by a build that agrees about the FFI as well.
 */
 module mizu.lookup;
 
 import core.stdc.string : memcmp;
 
-import mizu.config : noFFI;
-import mizu.opcode;
+static import mizu.config;
+static import mizu.opcode;
 
-import mizu.instructions.core;
-import mizu.instructions.dbg;
-import mizu.instructions.f32;
-import mizu.instructions.f64;
-import mizu.instructions.unsafe;
-import mizu.instructions.parallel;
-import mizu.instructions.atomic;
-import mizu.instructions.checked;
-static if (!noFFI) import mizu.ffi.instructions;
+static import mizu.instructions.core;
+static import mizu.instructions.dbg;
+static import mizu.instructions.f32;
+static import mizu.instructions.f64;
+static import mizu.instructions.unsafe;
+static import mizu.instructions.parallel;
+static import mizu.instructions.atomic;
+static import mizu.instructions.checked;
+static if (!mizu.config.noFFI) static import mizu.ffi.instructions;
 
 @nogc nothrow:
 
@@ -92,25 +54,19 @@ enum Id notFound = Id.max;
 /// One row of the lookup table.
 struct Entry {
 	/**
-	* The instruction's fully qualified D name — `mizu.instructions.core.add`,
-	* not `add` — null terminated so `.ptr` is printable.
+	* The instruction's fully qualified D name, `mizu.instructions.core.add` rather than `add`, null terminated so `.ptr` is printable.
 	*
 	* See_Also: `unqualifiedName`, `moduleOfName`
 	*/
 	string name;
 	/// The instruction itself; null for `programEnd`.
-	Instruction ptr;
+	mizu.opcode.Instruction ptr;
 }
 
-/// Our own, to avoid dragging `std.meta` into a `-betterC` build.
+// Our own, to avoid dragging `std.meta` into a `-betterC` build.
 private template AliasSeq(Args...) { alias AliasSeq = Args; }
 
-/**
-* Every module of Mizu's own whose instructions belong in the table, in ID
-* order.
-*
-* The FFI comes last deliberately: see the warning in the module docs.
-*/
+// Every module of Mizu's own whose instructions belong in the table, in ID order; the FFI comes last, as the module documentation explains.
 private alias ownModules = AliasSeq!(
 	mizu.instructions.core,
 	mizu.instructions.dbg,
@@ -122,35 +78,26 @@ private alias ownModules = AliasSeq!(
 	mizu.instructions.checked,
 );
 
-/// Ditto.
-static if (!noFFI)
+static if (!mizu.config.noFFI)
 	private alias builtinModules = AliasSeq!(ownModules, mizu.ffi.instructions);
 else
 	private alias builtinModules = ownModules;
 
-/// True if `mod`.`name` is an instruction `mod` itself declares.
+// True if `mod`.`name` is an instruction `mod` itself declares.
 private template isInstruction(alias mod, string name) {
 	static if (__traits(compiles, __traits(getMember, mod, name)))
 		enum bool isInstruction = __traits(compiles, {
 			alias symbol = __traits(getMember, mod, name);
 			static assert(__traits(isStaticFunction, symbol));
-			// Selective imports show up in allMembers too; only count the
-			// functions this module actually declares.
+			// Selective imports show up in allMembers too; only count the functions this module declares.
 			static assert(__traits(isSame, __traits(parent, symbol), mod));
-			Instruction check = &symbol;
+			mizu.opcode.Instruction check = &symbol;
 		});
 	else
 		enum bool isInstruction = false;
 }
 
-/**
-* The names of every instruction `mod` declares, in declaration order.
-*
-* This runs only during compilation, but it still has to obey the module's
-* `@nogc`, which a `-betterC` build does not enforce on it and an ordinary D
-* build does. Hence both the fixed size array (appending to a dynamic one
-* allocates) and `expand` below.
-*/
+// The names of every instruction `mod` declares, in declaration order, built without appending: an ordinary D build enforces `@nogc` on CTFE too.
 private template instructionsOf(alias mod) {
 	private size_t countInstructions() {
 		size_t total = 0;
@@ -169,10 +116,7 @@ private template instructionsOf(alias mod) {
 	}
 	private enum collected = collect();
 
-	// Handed out as a sequence rather than as the array: `static foreach`
-	// over an array has to build the sequence to walk it, and the way it
-	// does that appends, which is a GC allocation this module forbids.
-	// Iterating a sequence needs no such lowering.
+	// A sequence rather than the array, since `static foreach` over an array lowers to a GC append.
 	private template expand(size_t i) {
 		static if (i == collected.length) alias expand = AliasSeq!();
 		else alias expand = AliasSeq!(collected[i], expand!(i + 1));
@@ -180,7 +124,7 @@ private template instructionsOf(alias mod) {
 	alias instructionsOf = expand!0;
 }
 
-/// How many instructions `Mods` declare between them.
+// How many instructions `Mods` declare between them.
 private template totalInstructions(Mods...) {
 	private enum size_t count = () {
 		size_t total = 0;
@@ -192,22 +136,25 @@ private template totalInstructions(Mods...) {
 }
 
 /**
-* A lookup table over Mizu's instructions, plus the ones declared by the
-* `Extra` modules.
+* A lookup table over Mizu's instructions, plus the ones declared by the `Extra` modules.
 *
-* `Lookup!()` is the table this module's own `table`, `lookupId` and friends
-* are aliases for; instantiate it with your instruction modules to extend it.
-* See the module documentation.
+* `Lookup!()` is the table this module's own `table`, `lookupId` and friends are aliases for; instantiate it with your instruction modules to extend it. See the module documentation.
+*
+* Examples:
+* ---
+* alias plain = Lookup!();
+* static assert(plain.entryCount == plain.builtinCount);
+* assert(plain.lookup("add") is &add);
+* ---
 */
 template Lookup(Extra...) {
 	static foreach (mod; Extra)
-		static assert(__traits(isModule, mod),
-			"Lookup's arguments are the modules your instructions are declared in.");
+		static assert(__traits(isModule, mod), "Lookup's arguments are the modules your instructions are declared in.");
 
 	private alias allModules = AliasSeq!(builtinModules, Extra);
 
-	/// How many instructions the lookup knows about (including `programEnd`).
-	enum size_t entryCount = 1 + totalInstructions!allModules; // Slot zero is programEnd.
+	/// How many instructions the lookup knows about, including `programEnd` in slot zero.
+	enum size_t entryCount = 1 + totalInstructions!allModules;
 
 	/// How many of those are Mizu's own. `Extra`'s IDs start here.
 	enum size_t builtinCount = 1 + totalInstructions!builtinModules;
@@ -218,29 +165,46 @@ template Lookup(Extra...) {
 		result[i++] = Entry(__traits(fullyQualifiedName, mizu.instructions.core.programEnd), null);
 		static foreach (mod; allModules)
 			static foreach (name; instructionsOf!mod)
-				result[i++] = Entry(
-					__traits(fullyQualifiedName, __traits(getMember, mod, name)),
-					&__traits(getMember, mod, name));
+				result[i++] = Entry(__traits(fullyQualifiedName, __traits(getMember, mod, name)), &__traits(getMember, mod, name));
 		return result;
 	}
 
 	/// Every known instruction, indexed by ID. Built at compile time.
 	immutable Entry[entryCount] table = buildTable();
 
-	/// True if `id` names a row of `table`.
+	/**
+	* True if `id` names a row of `table`.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.validId(0));
+	* assert(!defaultLookup.validId(notFound));
+	* ---
+	*/
 	bool validId(Id id) { return id < entryCount; }
 
-	/// True if `id` names an instruction one of the `Extra` modules declares.
+	/**
+	* True if `id` names an instruction one of the `Extra` modules declares.
+	*
+	* Examples:
+	* ---
+	* assert(!defaultLookup.isExtendedId(defaultLookup.lookupId("add")));
+	* ---
+	*/
 	bool isExtendedId(Id id) { return id >= builtinCount && id < entryCount; }
 
 	/**
 	* Finds an instruction's ID by name.
 	*
-	* `name` may be fully qualified (`mizu.instructions.core.add`) or bare
-	* (`add`); a bare name matches the first row whose own final component
-	* matches, so qualify it when two packages declare the same instruction.
+	* `name` may be fully qualified (`mizu.instructions.core.add`) or bare (`add`); a bare name matches the first row whose own final component matches, so qualify it when two packages declare the same instruction.
 	*
 	* Returns: the ID, or `notFound`.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookupId("add") == defaultLookup.lookupId("mizu.instructions.core.add"));
+	* assert(defaultLookup.lookupId("nosuchinstruction") == notFound);
+	* ---
 	*/
 	Id lookupId(scope const(char)[] name) {
 		foreach (id; 0 .. entryCount)
@@ -257,8 +221,14 @@ template Lookup(Extra...) {
 	* Finds an instruction's ID by function pointer.
 	*
 	* Returns: the ID, or `notFound`. A null pointer is `programEnd`, ID zero.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookupId(&halt) != notFound);
+	* assert(defaultLookup.lookupId(cast(mizu.opcode.Instruction) null) == 0);
+	* ---
 	*/
-	Id lookupId(Instruction ptr) {
+	Id lookupId(mizu.opcode.Instruction ptr) {
 		foreach (id; 0 .. entryCount)
 			if (table[id].ptr is ptr)
 				return id;
@@ -268,11 +238,15 @@ template Lookup(Extra...) {
 	/**
 	* Looks up an instruction's function pointer by ID.
 	*
-	* Returns:
-	*   The instruction, or null. Note that null is also the legitimate answer
-	*   for ID zero (`programEnd`); use `validId` to tell the two apart.
+	* Returns: the instruction, or null. Null is also the legitimate answer for ID zero (`programEnd`); use `validId` to tell the two apart.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookupPointer(defaultLookup.lookupId("halt")) is &halt);
+	* assert(defaultLookup.lookupPointer(notFound) is null);
+	* ---
 	*/
-	Instruction lookupPointer(Id id) {
+	mizu.opcode.Instruction lookupPointer(Id id) {
 		if (!validId(id)) return null;
 		return table[id].ptr;
 	}
@@ -281,6 +255,12 @@ template Lookup(Extra...) {
 	* Looks up an instruction's name by ID.
 	*
 	* Returns: the name, or a null slice if `id` is out of range.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookupName(0) == "mizu.instructions.core.programEnd");
+	* assert(defaultLookup.lookupName(notFound) is null);
+	* ---
 	*/
 	string lookupName(Id id) {
 		if (!validId(id)) return null;
@@ -291,8 +271,14 @@ template Lookup(Extra...) {
 	* Finds an instruction's function pointer by name.
 	*
 	* Returns: the instruction, or null if the name is unknown.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookup("halt") is &halt);
+	* assert(defaultLookup.lookup("nosuchinstruction") is null);
+	* ---
 	*/
-	Instruction lookup(scope const(char)[] name) {
+	mizu.opcode.Instruction lookup(scope const(char)[] name) {
 		return lookupPointer(lookupId(name));
 	}
 
@@ -300,19 +286,23 @@ template Lookup(Extra...) {
 	* Finds an instruction's name by function pointer.
 	*
 	* Returns: the name, or a null slice if the pointer is unknown.
+	*
+	* Examples:
+	* ---
+	* assert(defaultLookup.lookup(&halt) == "mizu.instructions.core.halt");
+	* ---
 	*/
-	string lookup(Instruction ptr) {
+	string lookup(mizu.opcode.Instruction ptr) {
 		return lookupName(lookupId(ptr));
 	}
 }
 
-/// The lookup over Mizu's own instructions, which is what the names below
-/// refer to. Extended tables are `Lookup!(yourModule)`; see the module docs.
+/// The lookup over Mizu's own instructions, which the names below refer to. Extended tables are `Lookup!(yourModule)`; see the module documentation.
 alias defaultLookup = Lookup!();
 
 /// Ditto `Lookup.table`
 alias table = defaultLookup.table;
-/// How many instructions the lookup knows about (including `programEnd`).
+/// How many instructions the default lookup knows about, including `programEnd`.
 enum size_t instructionCount = defaultLookup.entryCount;
 /// Ditto `Lookup.validId`
 alias validId = defaultLookup.validId;
@@ -325,7 +315,15 @@ alias lookupName = defaultLookup.lookupName;
 /// Ditto `Lookup.lookup`
 alias lookup = defaultLookup.lookup;
 
-/// True if `a` and `b` are the same sequence of characters.
+/**
+* True if `a` and `b` are the same sequence of characters.
+*
+* Examples:
+* ---
+* assert(sameName("add", "add"));
+* assert(!sameName("add", "addF32"));
+* ---
+*/
 bool sameName(scope const(char)[] a, scope const(char)[] b) @trusted {
 	if (a.length != b.length) return false;
 	if (a.length == 0) return true;
@@ -333,8 +331,13 @@ bool sameName(scope const(char)[] a, scope const(char)[] b) @trusted {
 }
 
 /**
-* The instruction half of a fully qualified `name`: everything after the last
-* dot, or all of `name` if it has none.
+* The instruction half of a fully qualified `name`: everything after the last dot, or all of `name` if it has none.
+*
+* Examples:
+* ---
+* assert(unqualifiedName("mizu.instructions.core.add") == "add");
+* assert(unqualifiedName("add") == "add");
+* ---
 */
 const(char)[] unqualifiedName(return scope const(char)[] name) {
 	foreach_reverse (i, c; name)
@@ -343,8 +346,13 @@ const(char)[] unqualifiedName(return scope const(char)[] name) {
 }
 
 /**
-* The module half of a fully qualified `name`: everything before the last
-* dot, or an empty slice if it has none.
+* The module half of a fully qualified `name`: everything before the last dot, or an empty slice if it has none.
+*
+* Examples:
+* ---
+* assert(moduleOfName("mizu.instructions.core.add") == "mizu.instructions.core");
+* assert(moduleOfName("add").length == 0);
+* ---
 */
 const(char)[] moduleOfName(return scope const(char)[] name) {
 	foreach_reverse (i, c; name)
@@ -354,21 +362,21 @@ const(char)[] moduleOfName(return scope const(char)[] name) {
 
 unittest {
 	// programEnd owns slot zero, so a null op round-trips through serialization.
-	assert(lookupId(cast(Instruction) null) == 0);
+	assert(lookupId(cast(mizu.opcode.Instruction) null) == 0);
 	assert(lookupPointer(0) is null);
 	assert(sameName(lookupName(0), "mizu.instructions.core.programEnd"));
 
 	// Every core instruction is present, findable both ways, and agrees with itself.
 	immutable id = lookupId("mizu.instructions.core.loadImmediate");
 	assert(id != notFound);
-	assert(lookupPointer(id) is &loadImmediate);
-	assert(lookupId(&loadImmediate) == id);
-	assert(sameName(lookup(&loadImmediate), "mizu.instructions.core.loadImmediate"));
-	assert(lookup("mizu.instructions.core.loadImmediate") is &loadImmediate);
+	assert(lookupPointer(id) is &mizu.instructions.core.loadImmediate);
+	assert(lookupId(&mizu.instructions.core.loadImmediate) == id);
+	assert(sameName(lookup(&mizu.instructions.core.loadImmediate), "mizu.instructions.core.loadImmediate"));
+	assert(lookup("mizu.instructions.core.loadImmediate") is &mizu.instructions.core.loadImmediate);
 
 	// A bare name still finds it, and a wrongly qualified one does not.
 	assert(lookupId("loadImmediate") == id);
-	assert(lookup("loadImmediate") is &loadImmediate);
+	assert(lookup("loadImmediate") is &mizu.instructions.core.loadImmediate);
 	assert(lookupId("mizu.instructions.f32.loadImmediate") == notFound);
 
 	// Instructions from every module made it in, under their own module's name.
@@ -384,7 +392,7 @@ unittest {
 	assert(sameName(lookupName(lookupId("addF64")), "mizu.instructions.f64.addF64"));
 	assert(sameName(lookupName(lookupId("copyMemory")), "mizu.instructions.unsafe.copyMemory"));
 	assert(sameName(lookupName(lookupId("channelCreate")), "mizu.instructions.parallel.channelCreate"));
-	static if (!noFFI)
+	static if (!mizu.config.noFFI)
 		assert(sameName(lookupName(lookupId("createInterface")), "mizu.ffi.instructions.createInterface"));
 
 	// Helpers that are not instructions stayed out.
@@ -407,15 +415,14 @@ unittest {
 }
 
 unittest {
-	// An instruction the table has never seen is `notFound` by either name,
-	// and an out of range ID answers with nothing rather than row zero.
-	static extern(C) void* stranger(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+	// An instruction the table has never seen is `notFound` by either name, and an out of range ID answers with nothing rather than row zero.
+	static extern(C) void* stranger(mizu.opcode.Opcode* pc, ulong* registers, mizu.opcode.RegistersAndStack* env, ubyte* sp) @nogc nothrow {
 		return null;
 	}
 
 	assert(stranger(null, null, null, null) is null); // ... and it is a real one.
-	assert(lookupId(cast(Instruction) &stranger) == notFound);
-	assert(lookup(cast(Instruction) &stranger) is null);
+	assert(lookupId(cast(mizu.opcode.Instruction) &stranger) == notFound);
+	assert(lookup(cast(mizu.opcode.Instruction) &stranger) is null);
 	assert(!validId(notFound));
 	assert(lookupName(notFound) is null);
 	assert(lookupPointer(notFound) is null);
@@ -428,7 +435,7 @@ unittest {
 	}
 }
 
-version (unittest) private extern(C) void* testExtraInstruction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+version (unittest) private extern(C) void* testExtraInstruction(mizu.opcode.Opcode* pc, ulong* registers, mizu.opcode.RegistersAndStack* env, ubyte* sp) {
 	return null;
 }
 
@@ -449,19 +456,17 @@ unittest {
 	assert(sameName(extended.lookupName(id), "mizu.lookup.testExtraInstruction"));
 	assert(id >= extended.builtinCount);
 	assert(extended.isExtendedId(id));
-	assert(extended.lookupPointer(id) is cast(Instruction) &testExtraInstruction);
-	assert(extended.lookupId(cast(Instruction) &testExtraInstruction) == id);
+	assert(extended.lookupPointer(id) is cast(mizu.opcode.Instruction) &testExtraInstruction);
+	assert(extended.lookupId(cast(mizu.opcode.Instruction) &testExtraInstruction) == id);
 
 	// The unextended table knows nothing about it.
 	assert(lookupId("mizu.lookup.testExtraInstruction") == notFound);
 	assert(lookupId("testExtraInstruction") == notFound);
-	assert(lookupId(cast(Instruction) &testExtraInstruction) == notFound);
+	assert(lookupId(cast(mizu.opcode.Instruction) &testExtraInstruction) == notFound);
 }
 
 unittest {
-	// Every stored name is qualified by the module that declares the
-	// instruction, and is still a null terminated literal, so `Entry.name`'s
-	// promise that `.ptr` is printable survives being built by a trait.
+	// Every stored name is qualified by its module, and still null terminated, so `Entry.name`'s promise that `.ptr` is printable holds.
 	foreach (i; 0 .. instructionCount) {
 		auto name = table[i].name;
 		assert(moduleOfName(name).length > 0);

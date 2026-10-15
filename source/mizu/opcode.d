@@ -1,44 +1,37 @@
 /**
-* The core Mizu types: the register file, the `Opcode` an instruction acts
-* on, the environment holding a program's registers and stack, and the
-* dispatch mixin (`mizuNext`) every instruction ends with.
+* The core Mizu types: the register file, the `Opcode` an instruction acts on, the environment holding a program's registers and stack, and the dispatch mixin (`mizuNext`) every instruction ends with.
 */
 module mizu.opcode;
 
 import core.stdc.string : memcpy;
 
-import fp.pointer : Array, ptrLength = length;
+static import fp.dynarray;
+static import fp.pointer;
 
-import mizu.config;
-import mizu.exception : fatal;
+static import mizu.config;
+static import mizu.error;
 
-// DMD cannot produce a working Mizu, so refuse here rather than leaving it to
-// surface as undefined druntime symbols at link time (`_memset128ii`,
-// `core.bitop.byteswap`, which `-betterC` will not link against) or as a stack
-// overflow the first time a program loops. `MizuAllowDMD` lowers this back to
-// the warning it used to be, for tools that only ever analyse these sources --
-// `dmd -o-` syntax checks, ddoc -- and never run what they build. Nothing in
-// this repository sets it: DMD cannot run the test suite or the coverage build
-// either, so both are better off with the error.
+// DMD performs no tail calls, so dispatch overflows the stack; `MizuAllowDMD` lets analysis-only tools such as `dmd -o-` and ddoc through.
 version(DigitalMars) {
-	static if (allowDMD)
-		pragma(msg,
-			"mizu: warning - DMD does not perform tail call optimization, so "
-			~ "Mizu's dispatch will overflow the stack at run time.");
+	static if (mizu.config.allowDMD)
+		pragma(msg, "mizu: warning - DMD does not perform tail call optimization, so Mizu's dispatch will overflow the stack at run time.");
 	else
-		static assert(0,
-			"mizu: DMD cannot build Mizu. It performs no tail call "
-			~ "optimization, so the dispatch below overflows the stack on the "
-			~ "first loop of any size, and it emits druntime calls that "
-			~ "-betterC then refuses to link. Build with LDC "
-			~ "(--compiler=ldc2) at -O1 or higher. To analyse these sources "
-			~ "with DMD without running them, set -version=MizuAllowDMD.");
+		static assert(0, "mizu: DMD cannot build Mizu. It performs no tail call optimization, so the dispatch below overflows the stack on the first loop of any size, and it emits druntime calls that -betterC then refuses to link. Build with LDC (--compiler=ldc2) at -O1 or higher. To analyse these sources with DMD without running them, set -version=MizuAllowDMD.");
 }
 
 @nogc nothrow:
 
 /// Type used to name a register inside an `Opcode`.
 alias Reg = ushort;
+
+/// How many registers an environment has; the stack begins where they end.
+enum size_t registerCount = 256;
+
+/// How many temporary registers (`t0` up to `t19`) there are.
+enum size_t temporaryCount = 20;
+
+/// How many argument registers (`a0` onward) there are: every register after `ra`.
+enum size_t argumentCount = registerCount - temporaryCount - 2;
 
 /**
 * The register file.
@@ -47,32 +40,51 @@ alias Reg = ushort;
 *   $(LI `x0` (`zero`) is always zero.)
 *   $(LI `x1`-`x20` (`t0`-`t19`) are temporaries, saved by the caller if needed.)
 *   $(LI `x21` (`ra`) is the return address (callee saved).)
-*   $(LI `x22`-`x256` (`a0`-`a234`) are the argument registers (callee saved).))
+*   $(LI `x22`-`x255` (`a0`-`a233`) are the argument registers (callee saved).))
 *
-* Note:
-*   `a0`/`x22` and `a1`/`x23` are the canonical return registers.
+* Note: `a0`/`x22` and `a1`/`x23` are the canonical return registers.
 *
-* This is a `struct` used purely as a namespace, mirroring the C++
-* `mizu::registers` inline namespace, so that call sites read
-* `registers.t(0)` the way they used to read `mizu::registers::t(0)`.
+* A `struct` used purely as a namespace, mirroring the C++ `mizu::registers` namespace, so call sites read `Registers.t(0)`.
 */
 struct Registers {
 	@disable this();
 static @nogc nothrow:
 
-	/// Generic register lookup; `i` is the register's index.
-	Reg x(size_t i) { return cast(Reg) i; }
+	/**
+	* Generic register lookup; `i` is the register's index, below `registerCount`.
+	*
+	* Examples:
+	* ---
+	* static assert(Registers.x(7) == 7);
+	* ---
+	*/
+	Reg x(size_t i) in(i < registerCount) { return cast(Reg) i; }
 
-	/// Temporary register lookup; `i` is the temporary's index (0-19).
-	Reg t(size_t i) in(i <= 20) { return cast(Reg)(i + 1); }
+	/**
+	* Temporary register lookup; `i` is the temporary's index, below `temporaryCount`.
+	*
+	* Examples:
+	* ---
+	* static assert(Registers.t(0) == 1);
+	* static assert(Registers.t(19) == 20);
+	* ---
+	*/
+	Reg t(size_t i) in(i < temporaryCount) { return cast(Reg)(i + 1); }
 
-	/// Argument register lookup; `i` is the argument's index.
-	Reg a(size_t i) { return cast(Reg)(i + 22); }
+	/**
+	* Argument register lookup; `i` is the argument's index, below `argumentCount`.
+	*
+	* Examples:
+	* ---
+	* static assert(Registers.a(0) == 22);
+	* ---
+	*/
+	Reg a(size_t i) in(i < argumentCount) { return cast(Reg)(returnAddress + 1 + i); }
 
 	/// The always-zero register.
 	enum Reg zero = 0;
 	/// The return address register.
-	enum Reg returnAddress = 21;
+	enum Reg returnAddress = temporaryCount + 1;
 	/// Ditto
 	alias ra = returnAddress;
 }
@@ -80,38 +92,25 @@ static @nogc nothrow:
 /**
 * Spelling of `Registers` that matches the C++ `mizu::registers` namespace.
 *
-* Note:
-*   Inside an instruction the `registers` parameter shadows this alias, so
-*   instruction bodies say `Registers.a(0)`.
+* Note: inside an instruction the `registers` parameter shadows this alias, so instruction bodies say `Registers.a(0)`.
 */
 alias registers = Registers;
 
 /**
 * The interface every instruction implements.
 *
-* `extern(C)` is not cosmetic: every instruction tail-calls the next one
-* through this pointer, and a tail call is only possible between functions
-* that agree on their calling convention.
+* `extern(C)` is not cosmetic: every instruction tail-calls the next one through this pointer, and a tail call is only possible between functions that agree on their calling convention.
 */
 alias Instruction = extern(C) void* function(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow;
 
 /**
 * An instruction plus (up to) three registers for it to act upon.
 *
-* Note:
-*   Since `Instruction` is a pointer this struct has different sizes on
-*   different machines, so Mizu binaries are only compatible with machines
-*   of the same pointer size and endianness.
+* Note: since `Instruction` is a pointer this struct has different sizes on different machines, so Mizu binaries are only compatible with machines of the same pointer size and endianness.
 *
-* The immediate accessors pack a 32 bit value into the `a`/`b` register
-* fields as `a = low half, b = high half`. The C++ original reinterpreted
-* the two fields as one `uint32_t`, which is the same thing on a
-* little-endian machine but cannot be constant-folded in D, so the halves
-* are written explicitly — which also makes the packing independent of host
-* endianness and lets whole programs live in read-only data.
+* The immediate accessors pack a 32 bit value into the `a`/`b` register fields as `a = low half, b = high half`. Writing the halves explicitly, rather than reinterpreting the pair as one `uint`, lets them constant-fold and keeps the packing independent of host endianness, so whole programs can live in read-only data.
 */
 struct Opcode {
-@nogc nothrow:
 	/// Instruction to perform.
 	Instruction op;
 	/// Register to store the instruction's result in.
@@ -120,79 +119,181 @@ struct Opcode {
 	Reg a;
 	/// Register storing the second argument.
 	Reg b;
+}
 
-	/// The `u32` immediate held in `a` and `b`.
-	uint immediate() const { return a | (cast(uint) b << 16); }
-	/// Replaces `a` and `b` with a `u32` immediate value.
-	Opcode setImmediate(uint value) {
-		a = cast(Reg)(value & 0xFFFF);
-		b = cast(Reg)(value >> 16);
-		return this;
-	}
+/**
+* The `u32` immediate held in `code.a` and `code.b`.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setImmediate(0xDEADBEEF).immediate == 0xDEADBEEF);
+* ---
+*/
+uint immediate(const Opcode code) { return code.a | (cast(uint) code.b << 16); }
 
-	/// The `i32` immediate held in `a` and `b`.
-	int immediateSigned() const { return cast(int) immediate; }
-	/// Replaces `a` and `b` with an `i32` immediate value.
-	Opcode setImmediateSigned(int value) { return setImmediate(cast(uint) value); }
+/**
+* `code` with `a` and `b` replaced by a `u32` immediate value: the low half in `a`, the high half in `b`.
+*
+* Examples:
+* ---
+* static immutable Opcode code = Opcode(&loadImmediate, Registers.t(0)).setImmediate(0xDEADBEEF);
+* static assert(code.a == 0xBEEF && code.b == 0xDEAD);
+* ---
+*/
+Opcode setImmediate(Opcode code, uint value) {
+	code.a = cast(Reg)(value & 0xFFFF);
+	code.b = cast(Reg)(value >> 16);
+	return code;
+}
 
-	/// The `i16` immediate held in `b`, used for branch offsets.
-	short branchImmediate() const { return cast(short) b; }
-	/// Replaces `b` with an `i16` immediate value (used to determine branch offsets).
-	Opcode setBranchImmediate(short value) { b = cast(Reg) value; return this; }
+/**
+* The `i32` immediate held in `code.a` and `code.b`.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setImmediateSigned(-1).immediateSigned == -1);
+* ---
+*/
+int immediateSigned(const Opcode code) { return cast(int) immediate(code); }
 
-	/// The `f32` immediate held in `a` and `b`.
-	float immediateF32() const {
-		immutable bits = immediate;
-		return *cast(const float*) &bits;
-	}
-	/// Replaces `a` and `b` with an `f32` immediate value.
-	Opcode setImmediateF32(float value) { return setImmediate(*cast(uint*) &value); }
+/**
+* `code` with `a` and `b` replaced by an `i32` immediate value.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setImmediateSigned(int.min).immediateSigned == int.min);
+* ---
+*/
+Opcode setImmediateSigned(Opcode code, int value) { return setImmediate(code, cast(uint) value); }
 
-	/// Replaces `a` and `b` with the lower half of an `f64` immediate value.
-	Opcode setLowerImmediateF64(double value) {
-		return setImmediate(cast(uint)(*cast(ulong*) &value));
-	}
-	/// Replaces `a` and `b` with the upper half of an `f64` immediate value.
-	Opcode setUpperImmediateF64(double value) {
-		return setImmediate(cast(uint)((*cast(ulong*) &value) >> 32));
-	}
+/**
+* The `i16` immediate held in `code.b`, used for branch offsets.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setBranchImmediate(-2).branchImmediate == -2);
+* ---
+*/
+short branchImmediate(const Opcode code) { return cast(short) code.b; }
 
-	/// Replaces `a` and `b` with the lower half of a host pointer.
-	Opcode setHostPointerLowerImmediate(const(void)* ptr) {
-		return setImmediate(cast(uint) cast(size_t) ptr);
-	}
-	/// Replaces `a` and `b` with the upper half of a host pointer.
-	Opcode setHostPointerUpperImmediate(const(void)* ptr) {
-		static if (size_t.sizeof > uint.sizeof)
-			return setImmediate(cast(uint)((cast(size_t) ptr) >> 32));
-		else
-			return setImmediate(0);
-	}
+/**
+* `code` with `b` replaced by an `i16` immediate value, used for branch offsets.
+*
+* Examples:
+* ---
+* static immutable Opcode code = Opcode(&branchRelativeImmediate, 0, Registers.t(0)).setBranchImmediate(-1);
+* static assert(code.a == Registers.t(0) && code.branchImmediate == -1);
+* ---
+*/
+Opcode setBranchImmediate(Opcode code, short value) {
+	code.b = cast(Reg) value;
+	return code;
+}
+
+/**
+* The `f32` immediate held in `code.a` and `code.b`.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setImmediateF32(1.5f).immediateF32 == 1.5f);
+* ---
+*/
+float immediateF32(const Opcode code) {
+	immutable bits = immediate(code);
+	return *cast(const float*) &bits;
+}
+
+/**
+* `code` with `a` and `b` replaced by an `f32` immediate value.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setImmediateF32(-0.125f).immediateF32 == -0.125f);
+* ---
+*/
+Opcode setImmediateF32(Opcode code, float value) { return setImmediate(code, *cast(uint*) &value); }
+
+/**
+* `code` with `a` and `b` replaced by the lower half of an `f64` immediate value; pair it with `setUpperImmediateF64`.
+*
+* Examples:
+* ---
+* enum double value = 1234.5678;
+* immutable ulong bits = Opcode.init.setLowerImmediateF64(value).immediate | (cast(ulong) Opcode.init.setUpperImmediateF64(value).immediate << 32);
+* assert(*cast(const double*) &bits == value);
+* ---
+*/
+Opcode setLowerImmediateF64(Opcode code, double value) {
+	return setImmediate(code, cast(uint)(*cast(ulong*) &value));
+}
+
+/**
+* `code` with `a` and `b` replaced by the upper half of an `f64` immediate value; pair it with `setLowerImmediateF64`.
+*
+* Examples:
+* ---
+* static assert(Opcode.init.setUpperImmediateF64(-2.0).immediate == 0xC000_0000);
+* ---
+*/
+Opcode setUpperImmediateF64(Opcode code, double value) {
+	return setImmediate(code, cast(uint)((*cast(ulong*) &value) >> 32));
+}
+
+/**
+* `code` with `a` and `b` replaced by the lower half of a host pointer; pair it with `setHostPointerUpperImmediate`.
+*
+* Examples:
+* ---
+* static int target;
+* auto code = Opcode.init.setHostPointerLowerImmediate(&target);
+* assert(code.immediate == cast(uint) cast(size_t) &target);
+* ---
+*/
+Opcode setHostPointerLowerImmediate(Opcode code, const(void)* ptr) {
+	return setImmediate(code, cast(uint) cast(size_t) ptr);
+}
+
+/**
+* `code` with `a` and `b` replaced by the upper half of a host pointer, or zero where pointers are 32 bits; pair it with `setHostPointerLowerImmediate`.
+*
+* Examples:
+* ---
+* static int target;
+* auto code = Opcode.init.setHostPointerUpperImmediate(&target);
+* assert((cast(ulong) code.immediate << 32 | Opcode.init.setHostPointerLowerImmediate(&target).immediate) == cast(size_t) &target);
+* ---
+*/
+Opcode setHostPointerUpperImmediate(Opcode code, const(void)* ptr) {
+	static if (size_t.sizeof > uint.sizeof)
+		return setImmediate(code, cast(uint)((cast(size_t) ptr) >> 32));
+	else
+		return setImmediate(code, 0);
 }
 
 /**
 * How many registers long a Mizu environment's memory space is.
 * See_Also: `mizu.config.stackSizeKilobytes`
 */
-enum size_t memorySize = cast(size_t)(1024 * stackSizeKilobytes) / ulong.sizeof;
+enum size_t memorySize = cast(size_t)(1024 * mizu.config.stackSizeKilobytes) / ulong.sizeof;
 /// How many bytes a Mizu environment's memory space is.
 enum size_t memorySizeBytes = memorySize * ulong.sizeof;
+/// How many bytes of a Mizu environment's memory space are stack rather than registers.
+enum size_t stackSizeBytes = (memorySize - registerCount) * ulong.sizeof;
+static assert(memorySize > registerCount, "mizu: stackSizeKilobytes leaves no room for a stack");
 
 /// The registers and stack space backing one Mizu program or thread.
 struct RegistersAndStack {
-@nogc nothrow:
 	/**
 	* Memory holding both the registers and the stack.
 	* See_Also: `mizu.config.stackSizeKilobytes`
 	*/
-	Array!(ulong, memorySize) memory;
+	fp.pointer.Array!(ulong, memorySize) memory;
 	/// Boundary between the stack and the registers.
 	ubyte* stackBoundary;
 	/**
-	* The bottom (last byte) of the stack.
+	* The bottom (one past the last byte) of the stack.
 	*
-	* Note: Mizu's stack pointer counts down from the last byte of `memory`
-	* until it reaches `stackBoundary`.
+	* Note: Mizu's stack pointer counts down from the end of `memory` until it reaches `stackBoundary`.
 	*/
 	ubyte* stackBottom;
 
@@ -200,15 +301,37 @@ struct RegistersAndStack {
 	const(Opcode)* programStart = null;
 	/// End of the program, or null if unknown.
 	const(Opcode)* programEnd = null;
+}
 
-	/// Where the program starts, estimated from `pc` when unknown.
-	const(Opcode)* calculateProgramStart(const(Opcode)* pc) const {
-		return programStart ? programStart : pc - maximumLabelSearch;
-	}
-	/// Where the program ends, estimated from `pc` when unknown.
-	const(Opcode)* calculateProgramEnd(const(Opcode)* pc) const {
-		return programEnd ? programEnd : pc + maximumLabelSearch;
-	}
+/**
+* Where the program `env` runs starts, estimated as `maximumLabelSearch` instructions before `pc` when unknown.
+*
+* Examples:
+* ---
+* static immutable Opcode[1] program = [Opcode(&halt)];
+* RegistersAndStack env;
+* assert(calculateProgramStart(env, program.ptr) is program.ptr - maximumLabelSearch);
+* setupEnvironment(env, program[]);
+* assert(calculateProgramStart(env, program.ptr) is program.ptr);
+* ---
+*/
+const(Opcode)* calculateProgramStart(ref const RegistersAndStack env, const(Opcode)* pc) {
+	return env.programStart ? env.programStart : pc - mizu.config.maximumLabelSearch;
+}
+
+/**
+* Where the program `env` runs ends, estimated as `maximumLabelSearch` instructions after `pc` when unknown.
+*
+* Examples:
+* ---
+* static immutable Opcode[1] program = [Opcode(&halt)];
+* RegistersAndStack env;
+* setupEnvironment(env, program[]);
+* assert(calculateProgramEnd(env, program.ptr) is program.ptr + 1);
+* ---
+*/
+const(Opcode)* calculateProgramEnd(ref const RegistersAndStack env, const(Opcode)* pc) {
+	return env.programEnd ? env.programEnd : pc + mizu.config.maximumLabelSearch;
 }
 
 /**
@@ -218,16 +341,35 @@ struct RegistersAndStack {
 *   env = the environment to configure
 *   programStart = pointer to the start of the program (optional)
 *   programEnd = pointer to one past the end of the program (optional)
+*
+* Examples:
+* ---
+* RegistersAndStack env;
+* setupEnvironment(env);
+* assert(env.memory[0] == 0);
+* assert(env.stackBottom - env.stackBoundary == stackSizeBytes);
+* ---
 */
 void setupEnvironment(ref RegistersAndStack env, const(Opcode)* programStart = null, const(Opcode)* programEnd = null) @trusted {
 	env.memory[0] = 0;
-	env.stackBoundary = cast(ubyte*)(env.memory.ptr + 256);
+	env.stackBoundary = cast(ubyte*)(env.memory.ptr + registerCount);
 	env.stackBottom = cast(ubyte*)(env.memory.ptr + memorySize);
 	env.programStart = programStart;
 	env.programEnd = programEnd;
 }
 
-/// Ditto, taking the whole program as a slice.
+/**
+* Configures a new Mizu environment to run `program`, zeroing register `x0`.
+*
+* Examples:
+* ---
+* static immutable Opcode[1] program = [Opcode(&halt)];
+* RegistersAndStack env;
+* setupEnvironment(env, program[]);
+* assert(env.programStart == program.ptr);
+* assert(env.programEnd == program.ptr + 1);
+* ---
+*/
 void setupEnvironment(ref RegistersAndStack env, const(Opcode)[] program) @trusted {
 	setupEnvironment(env, program.ptr, program.ptr + program.length);
 }
@@ -235,46 +377,68 @@ void setupEnvironment(ref RegistersAndStack env, const(Opcode)[] program) @trust
 /**
 * Copies `binary` into the bottom of an environment's stack.
 *
+* Data longer than `stackSizeBytes` runs on into the registers, so a whole `memory` snapshot, as `mizu.portable_format.toPortable` takes, restores them too.
+*
 * Params:
 *   env = the environment to copy data into
-*   binary = the data to fill the bottom of its stack with
+*   binary = the data to fill the bottom of its stack with, at most `memorySizeBytes` long
+*
+* Examples:
+* ---
+* static immutable ubyte[4] data = [0xDE, 0xAD, 0xBE, 0xEF];
+* RegistersAndStack env;
+* setupEnvironment(env);
+* fillStackBottom(env, data[]);
+* assert((env.stackBottom - 4)[0 .. 4] == data[]);
+* ---
 */
 void fillStackBottom(ref RegistersAndStack env, const(void)[] binary) @trusted {
-	assert(binary.length <= memorySizeBytes);
+	assert(binary.length <= memorySizeBytes, "mizu: data does not fit in memory");
 	auto end = cast(ubyte*)(env.memory.ptr + memorySize);
 	memcpy(end - binary.length, binary.ptr, binary.length);
 }
 
 /**
-* Traces one instruction to stdout. Only does anything when the
-* `MizuEnableTracing` version is set.
+* Prints one instruction's name and operands to stdout, but only when the `MizuEnableTracing` version is set.
+*
+* Examples:
+* ---
+* static immutable Opcode code = Opcode(&halt);
+* trace("halt", &code);
+* ---
 */
 void trace(scope const(char)[] name, const(Opcode)* pc) @trusted {
-	static if (enableTracing) {
+	static if (mizu.config.enableTracing) {
 		import core.stdc.stdio : printf;
-		printf("%.*s(%u, %u, %u)\n", cast(int) name.length, name.ptr,
-			pc.out_, pc.a, pc.b);
+		cast(void) printf("%.*s(%u, %u, %u)\n", cast(int) name.length, name.ptr, pc.out_, pc.a, pc.b);
 	}
 }
 
 /**
-* Executes the next instruction. Mix this in at the end of every
-* instruction: `mixin(mizuNext);`
+* Executes the next instruction. Mix this in at the end of every instruction: `mixin(mizuNext);`
 *
-* This is the D spelling of the C++ `MIZU_NEXT()` macro. It has to be a
-* mixin rather than a function because the dispatch must be a tail call
-* made by the instruction itself — see the tail call notes in the README.
+* It is a mixin rather than a function because the dispatch must be a tail call made by the instruction itself; see the tail call notes in the README.
+*
+* Examples:
+* ---
+* static extern(C) void* nop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
+* 	mixin(mizuNext);
+* }
+* static immutable Opcode[2] program = [Opcode(&nop), Opcode(&halt)];
+* RegistersAndStack env;
+* setupEnvironment(env, program[]);
+* assert(startFromEnvironment(program[], env) is null);
+* ---
 */
-static if (noHardwareThreads)
-	enum string mizuNext = q{
+enum string mizuNext = mizu.config.noHardwareThreads
+	? q{
 		{
 			mizu.opcode.trace(__FUNCTION__, pc);
 			registers[0] = 0;
 			return mizu.opcode.Coroutine.next(pc, registers, env, sp);
 		}
-	};
-else
-	enum string mizuNext = q{
+	}
+	: q{
 		{
 			mizu.opcode.trace(__FUNCTION__, pc);
 			registers[0] = 0;
@@ -283,12 +447,24 @@ else
 		}
 	};
 
-static if (!noHardwareThreads) {
+static if (!mizu.config.noHardwareThreads) {
 
 	/**
 	* Starts executing `program` in `env`.
 	*
 	* Returns: whatever the program's final instruction returned (null for `halt`).
+	*
+	* Examples:
+	* ---
+	* static immutable Opcode[2] program = [
+	* 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(42),
+	* 	Opcode(&halt),
+	* ];
+	* RegistersAndStack env;
+	* setupEnvironment(env, program[]);
+	* assert(startFromEnvironment(program.ptr, env) is null);
+	* assert(env.memory[Registers.t(0)] == 42);
+	* ---
 	*/
 	void* startFromEnvironment(const(Opcode)* program, ref RegistersAndStack env) @trusted {
 		auto pc = cast(Opcode*) program;
@@ -298,22 +474,17 @@ static if (!noHardwareThreads) {
 } else {
 
 	/**
-	* The single-core fallback for `mizu.instructions.parallel`: instead of OS
-	* threads, every "thread" is an execution context and `next` round-robins
-	* between them, so an instruction that cannot make progress yet just
-	* rewinds its own program counter and yields.
+	* The single-core fallback for `mizu.instructions.parallel`: instead of OS threads, every "thread" is an execution context and `next` round-robins between them, so an instruction that cannot make progress yet just rewinds its own program counter and yields.
 	*/
 	struct Coroutine {
 		/// One suspended (or running) Mizu thread.
 		static struct ExecutionContext {
-		@nogc nothrow:
-			/// Null marks a context that has run to completion.
+			/// The instruction this context last ran; null marks a context that has run to completion.
 			Opcode* programCounter;
+			/// The context's stack pointer while it is suspended.
 			ubyte* stackPointer;
+			/// The registers and stack this context runs in.
 			RegistersAndStack* environment;
-
-			/// True once this context has halted.
-			bool done() const { return programCounter is null; }
 		}
 
 		/// All live contexts, as an `fp.dynarray`.
@@ -323,41 +494,108 @@ static if (!noHardwareThreads) {
 
 	static @nogc nothrow:
 
-		/// Advances `currentContext` to the next context, wrapping around.
+		/**
+		* True once `context` has halted.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	Coroutine.ExecutionContext finished;
+		* 	assert(Coroutine.done(finished));
+		* }
+		* ---
+		*/
+		bool done(ref const ExecutionContext context) { return context.programCounter is null; }
+
+		/**
+		* Advances `currentContext` to the next context, wrapping around, and returns it.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	static immutable Opcode[1] program = [Opcode(&halt)];
+		* 	RegistersAndStack env;
+		* 	setupEnvironment(env, program[]);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	assert(Coroutine.nextContext() == 1);
+		* 	assert(Coroutine.nextContext() == 0);
+		* 	Coroutine.clear();
+		* }
+		* ---
+		*/
 		size_t nextContext() {
-			return currentContext = (currentContext + 1) % ptrLength(contexts);
+			return currentContext = (currentContext + 1) % fp.pointer.length(contexts);
 		}
 
-		/// The context at `index`.
+		/**
+		* The context at `index`, which must be below the number of contexts.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	static immutable Opcode[1] program = [Opcode(&halt)];
+		* 	RegistersAndStack env;
+		* 	setupEnvironment(env, program[]);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	assert(Coroutine.getContext(0).environment is &env);
+		* 	Coroutine.clear();
+		* }
+		* ---
+		*/
 		ref ExecutionContext getContext(size_t index) @trusted
-		in(index < ptrLength(contexts))
+		in(index < fp.pointer.length(contexts))
 		{
 			return contexts[index];
 		}
 
-		/// The context currently executing.
+		/**
+		* The context currently executing.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	static immutable Opcode[1] program = [Opcode(&halt)];
+		* 	RegistersAndStack env;
+		* 	setupEnvironment(env, program[]);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	assert(&Coroutine.getCurrentContext() is &Coroutine.getContext(0));
+		* 	Coroutine.clear();
+		* }
+		* ---
+		*/
 		ref ExecutionContext getCurrentContext() { return getContext(currentContext); }
 
 		/**
-		* Suspends the running context and resumes the next one that still has
-		* work to do.
+		* Suspends the running context and resumes the next one that still has work to do, returning null once every context has halted.
 		*
 		* Note: shares `Instruction`'s signature so instructions can tail-call it.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	static immutable Opcode[2] program = [Opcode(&label), Opcode(&halt)];
+		* 	RegistersAndStack env;
+		* 	setupEnvironment(env, program[]);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	auto context = &Coroutine.getCurrentContext();
+		* 	assert(Coroutine.next(context.programCounter, env.memory.ptr, &env, env.stackBottom) is null);
+		* 	Coroutine.clear();
+		* }
+		* ---
 		*/
 		extern(C) void* next(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @trusted {
 			assert(sp);
 			getCurrentContext().stackPointer = sp;
 
-			if (ptrLength(contexts) == 1) {
+			if (fp.pointer.length(contexts) == 1) {
 				getCurrentContext().programCounter = ++pc;
 				return pc.op(pc, registers, env, sp);
 			}
 			// Record pc updates (jumps) before switching away.
 			getCurrentContext().programCounter = pc;
 
-			// Find the next context with work left; unlike the C++ original
-			// this is a loop rather than recursion, so an all-finished
-			// context list terminates instead of overflowing the stack.
+			// A loop rather than recursion, so a list of finished contexts terminates instead of overflowing the stack.
 			immutable start = currentContext;
 			do {
 				auto index = nextContext();
@@ -365,32 +603,60 @@ static if (!noHardwareThreads) {
 				if (context.programCounter is null) continue;
 
 				pc = ++context.programCounter;
-				return pc.op(pc, context.environment.memory.ptr, context.environment,
-					context.stackPointer);
+				return pc.op(pc, context.environment.memory.ptr, context.environment, context.stackPointer);
 			} while (currentContext != start);
 
-			return null; // Every context has halted.
+			return null;
 		}
 
-		/// Registers a new context beginning at `programCounter`.
+		/**
+		* Registers a new context beginning at `programCounter`, calling `mizu.error.fatal` if it cannot be stored.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	static immutable Opcode[1] program = [Opcode(&halt)];
+		* 	RegistersAndStack env;
+		* 	setupEnvironment(env, program[]);
+		* 	Coroutine.start(cast(Opcode*) program.ptr, &env);
+		* 	assert(!Coroutine.done());
+		* 	Coroutine.clear();
+		* }
+		* ---
+		*/
 		void start(Opcode* programCounter, RegistersAndStack* environment) @trusted {
-			import fp.dynarray : pushBack;
 			assert(programCounter && environment);
-			pushBack(contexts, ExecutionContext(programCounter - 1,
-				environment.stackBottom, environment));
+			if (!fp.dynarray.pushBack(contexts, ExecutionContext(programCounter - 1, environment.stackBottom, environment)))
+				mizu.error.fatal("Failed to allocate an execution context.");
 		}
 
-		/// Releases every context.
+		/**
+		* Releases every context.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) {
+		* 	Coroutine.clear();
+		* 	assert(Coroutine.contexts is null);
+		* }
+		* ---
+		*/
 		void clear() @trusted {
-			import fp.dynarray : dynFree = free;
-			if (contexts !is null) dynFree(contexts);
+			fp.dynarray.free(contexts);
 			currentContext = 0;
 		}
 
-		/// True once every context has halted.
+		/**
+		* True once every context has halted, including when there are none.
+		*
+		* Examples:
+		* ---
+		* static if (noHardwareThreads) assert(Coroutine.done());
+		* ---
+		*/
 		bool done() @trusted {
-			foreach (i; 0 .. ptrLength(contexts))
-				if (!getContext(i).done())
+			foreach (i; 0 .. fp.pointer.length(contexts))
+				if (!done(getContext(i)))
 					return false;
 			return true;
 		}
@@ -403,8 +669,7 @@ static if (!noHardwareThreads) {
 		void* result;
 		do {
 			auto context = &Coroutine.getCurrentContext();
-			result = Coroutine.next(context.programCounter, context.environment.memory.ptr,
-				context.environment, context.stackPointer);
+			result = Coroutine.next(context.programCounter, context.environment.memory.ptr, context.environment, context.stackPointer);
 		} while (result is null && !Coroutine.done());
 
 		Coroutine.clear();
@@ -413,7 +678,19 @@ static if (!noHardwareThreads) {
 
 }
 
-/// Ditto, taking the whole program as a slice.
+/**
+* Starts executing `program` in `env`, taking the whole program as a slice.
+*
+* Returns: whatever the program's final instruction returned (null for `halt`).
+*
+* Examples:
+* ---
+* static immutable Opcode[1] program = [Opcode(&halt)];
+* RegistersAndStack env;
+* setupEnvironment(env, program[]);
+* assert(startFromEnvironment(program[], env) is null);
+* ---
+*/
 void* startFromEnvironment(const(Opcode)[] program, ref RegistersAndStack env) {
 	return startFromEnvironment(program.ptr, env);
 }
@@ -427,12 +704,17 @@ unittest {
 	static assert(Registers.ra == 21);
 	static assert(Registers.a(0) == 22);
 	static assert(Registers.a(1) == 23);
+	static assert(Registers.a(argumentCount - 1) == registerCount - 1);
 	static assert(Registers.x(7) == 7);
+
+	// Each accessor refuses an index past its own range: t(20) would alias ra, and a(argumentCount) the stack.
+	static assert(!__traits(compiles, { enum r = Registers.t(temporaryCount); }));
+	static assert(!__traits(compiles, { enum r = Registers.a(argumentCount); }));
+	static assert(!__traits(compiles, { enum r = Registers.x(registerCount); }));
 }
 
 unittest {
-	// Immediates pack into the a/b register pair and read back unchanged, at
-	// compile time, so a program full of them can live in read-only data.
+	// Immediates pack into the a/b register pair and read back unchanged at compile time, so programs can live in read-only data.
 	static assert(Opcode.init.setImmediate(40).immediate == 40);
 	static assert(Opcode.init.setImmediate(uint.max).immediate == uint.max);
 	static assert(Opcode.init.setImmediate(0xDEADBEEF).immediate == 0xDEADBEEF);
@@ -449,9 +731,7 @@ unittest {
 
 	static assert(Opcode.init.setImmediateF32(1.5f).immediateF32 == 1.5f);
 	static assert(Opcode.init.setImmediateF32(-0.125f).immediateF32 == -0.125f);
-}
 
-unittest {
 	// An f64 immediate takes two instructions, so check the halves recombine.
 	enum double value = 1234.5678;
 	enum Opcode lower = Opcode.init.setLowerImmediateF64(value);
@@ -462,6 +742,32 @@ unittest {
 }
 
 unittest {
+	// The same packing at run time; `__gshared` inputs keep the optimizer from folding the calls back into CTFE.
+	__gshared uint immediate = 0xDEADBEEF;
+	__gshared int signed = int.min;
+	__gshared short branch = -2;
+	__gshared float single = 1.5f;
+	__gshared double dbl = 1234.5678;
+	__gshared size_t index = 7;
+
+	auto code = Opcode.init.setImmediate(immediate);
+	assert(code.immediate == 0xDEADBEEF);
+	assert(code.a == 0xBEEF);
+	assert(code.b == 0xDEAD);
+
+	assert(Opcode.init.setImmediateSigned(signed).immediateSigned == int.min);
+	assert(Opcode.init.setBranchImmediate(branch).branchImmediate == -2);
+	assert(Opcode.init.setImmediateF32(single).immediateF32 == 1.5f);
+
+	immutable lower = Opcode.init.setLowerImmediateF64(dbl);
+	immutable upper = Opcode.init.setUpperImmediateF64(dbl);
+	immutable ulong bits = lower.immediate | (cast(ulong) upper.immediate << 32);
+	assert(*cast(const double*)&bits == dbl);
+
+	assert(Registers.x(index) == 7);
+}
+
+unittest {
 	// setupEnvironment lays out the memory space the way the instructions expect.
 	static immutable Opcode[2] program = [Opcode.init, Opcode.init];
 
@@ -469,9 +775,9 @@ unittest {
 	setupEnvironment(env, program[]);
 
 	assert(env.memory[0] == 0);
-	assert(env.stackBoundary is cast(ubyte*)(env.memory.ptr + 256));
+	assert(env.stackBoundary is cast(ubyte*)(env.memory.ptr + registerCount));
 	assert(env.stackBottom is cast(ubyte*)(env.memory.ptr + memorySize));
-	assert(env.stackBottom - env.stackBoundary == (memorySize - 256) * ulong.sizeof);
+	assert(env.stackBottom - env.stackBoundary == stackSizeBytes);
 	assert(env.programStart is program.ptr);
 	assert(env.programEnd is program.ptr + 2);
 
@@ -479,8 +785,8 @@ unittest {
 	RegistersAndStack bare;
 	setupEnvironment(bare);
 	auto pc = cast(const(Opcode)*) program.ptr;
-	assert(bare.calculateProgramStart(pc) is pc - maximumLabelSearch);
-	assert(bare.calculateProgramEnd(pc) is pc + maximumLabelSearch);
+	assert(calculateProgramStart(bare, pc) is pc - mizu.config.maximumLabelSearch);
+	assert(calculateProgramEnd(bare, pc) is pc + mizu.config.maximumLabelSearch);
 }
 
 unittest {
@@ -494,48 +800,17 @@ unittest {
 	auto bottom = env.stackBottom - data.length;
 	foreach (i; 0 .. data.length)
 		assert(bottom[i] == data[i]);
+
+	// A whole snapshot of memory lands on the registers as well.
+	__gshared ulong[memorySize] snapshot;
+	snapshot[3] = 7;
+	fillStackBottom(env, snapshot[]);
+	assert(env.memory[3] == 7);
 }
 
+static if (mizu.config.noHardwareThreads)
 unittest {
-	// The same packing at run time. The `static assert`s above only prove the
-	// CTFE path, and a program assembled at run time (as the bubble sort test
-	// does) takes this one instead. The inputs are `__gshared` so that the
-	// optimizer cannot quietly constant fold the calls back into CTFE.
-	__gshared uint immediate = 0xDEADBEEF;
-	__gshared int signed = int.min;
-	__gshared short branch = -2;
-	__gshared float single = 1.5f;
-	__gshared double dbl = 1234.5678;
-	__gshared size_t index = 7;
-
-	auto code = Opcode.init.setImmediate(immediate);
-	assert(code.immediate == 0xDEADBEEF);
-	assert(code.a == 0xBEEF); // Low half in `a`, high half in `b`.
-	assert(code.b == 0xDEAD);
-
-	assert(Opcode.init.setImmediateSigned(signed).immediateSigned == int.min);
-	assert(Opcode.init.setBranchImmediate(branch).branchImmediate == -2);
-	assert(Opcode.init.setImmediateF32(single).immediateF32 == 1.5f);
-
-	// An f64 immediate takes two opcodes, so check the halves recombine.
-	immutable lower = Opcode.init.setLowerImmediateF64(dbl);
-	immutable upper = Opcode.init.setUpperImmediateF64(dbl);
-	immutable ulong bits = lower.immediate | (cast(ulong) upper.immediate << 32);
-	assert(*cast(const double*)&bits == dbl);
-
-	// `x` is the generic spelling the named register accessors shorten.
-	assert(Registers.x(index) == 7);
-}
-
-static if (noHardwareThreads)
-unittest {
-	// `Coroutine.next` giving up when nothing is left to run.
-	//
-	// `startFromEnvironment` never lets this happen — it checks `done()`
-	// before scheduling again — so the case is reached by driving the
-	// scheduler directly. It is worth holding onto: the search is a loop
-	// rather than the C++ original's recursion precisely so that an
-	// all-finished context list returns instead of overflowing the stack.
+	// `startFromEnvironment` checks `done()` before scheduling again, so an all-finished context list is only reachable by driving `next` directly.
 	Coroutine.clear();
 
 	Opcode instruction;

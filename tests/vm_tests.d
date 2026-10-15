@@ -1,9 +1,7 @@
 /**
-* End-to-end tests: real Mizu programs, run by the real VM, checked against
-* the values they are supposed to produce.
+* End-to-end tests: real Mizu programs, run by the real VM, checked against the values they are supposed to produce.
 *
-* These are the D ports of `tests/fib.cpp` and `tests/bubble.cpp`, plus
-* coverage of the pieces those two do not reach.
+* These are the D ports of `tests/fib.cpp` and `tests/bubble.cpp`, plus coverage of the pieces those two do not reach.
 */
 module vm_tests;
 
@@ -11,82 +9,60 @@ import mizu;
 
 @nogc nothrow:
 
-/// Runs `program` to completion in a fresh environment and returns its registers.
+// Runs `program` to completion in a fresh environment, which it leaves holding the final registers and stack.
 private void run(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
 	setupEnvironment(env, program);
-	startFromEnvironment(program, env);
+	assert(startFromEnvironment(program, env) is null);
 }
 
-/*
-* `mizu.exception.fatal` ends the process, so the only way to watch a misuse
-* being caught from inside that process is to intercept the `SIGABRT` that
-* `abort` raises and jump back out of the handler. Both platforms do exactly
-* that and differ only in how a handler is installed and how the jump buffer
-* is spelled, so that is all each branch below defines; `aborts` is shared.
-*/
+// `fatal` ends the process, so `aborts` catches its `SIGABRT` and jumps back out of the handler; the branches differ only in spelling.
 version(Posix) {
 	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGABRT;
 
-	// druntime declares `sigjmp_buf` as a static array, which D passes by
-	// value rather than decaying to a pointer the way C does, so bind these
-	// by pointer instead. `__sigsetjmp` is what glibc and uClibc export; every
-	// other platform exports it under its own name. See the matching note in
-	// `mizu.exception`.
+	// druntime passes `sigjmp_buf` by value, so these take a buffer by pointer; see the matching note in `mizu.error`.
 	version(CRuntime_Glibc) version = MizuUnderscoredSigsetjmp;
 	else version(CRuntime_UClibc) version = MizuUnderscoredSigsetjmp;
 
 	version(MizuUnderscoredSigsetjmp) {
-		private extern(C) @nogc nothrow int __sigsetjmp(void* buffer, int saveMask);
+		private extern(C) int __sigsetjmp(void* buffer, int saveMask);
 		private alias sigsetjmpByPointer = __sigsetjmp;
 	} else {
-		private extern(C) @nogc nothrow int sigsetjmp(void* buffer, int saveMask);
+		private extern(C) int sigsetjmp(void* buffer, int saveMask);
 		private alias sigsetjmpByPointer = sigsetjmp;
 	}
 
-	private extern(C) @nogc nothrow void siglongjmp(void* buffer, int value);
+	private extern(C) void siglongjmp(void* buffer, int value);
 
-	// druntime does not declare `sigjmp_buf` at all on Darwin, and where it
-	// does the layout is the C library's business rather than ours, so
-	// reserve a buffer large enough for every one of them instead: glibc's is
-	// the biggest at a little under 600 bytes on PowerPC, and macOS' is under
-	// 200. This is what the Windows branch below already does.
+	// Larger than any C library's `sigjmp_buf`: glibc's on PowerPC, the biggest, is just under 600 bytes.
 	private __gshared align(16) ubyte[1024] abortEscape;
 
-	/// What `installAbortHandler` has to give back to `restoreAbortHandler`.
+	// What `installAbortHandler` has to give back to `restoreAbortHandler`.
 	private alias SavedAbortHandler = sigaction_t;
 
 	private void installAbortHandler(out SavedAbortHandler saved) {
 		sigaction_t action;
-		sigemptyset(&action.sa_mask);
+		assert(sigemptyset(&action.sa_mask) == 0);
 		action.sa_handler = &onAbort;
-		sigaction(SIGABRT, &action, &saved);
+		assert(sigaction(SIGABRT, &action, &saved) == 0);
 	}
 
 	private void restoreAbortHandler(ref SavedAbortHandler saved) {
-		sigaction(SIGABRT, &saved, null);
+		assert(sigaction(SIGABRT, &saved, null) == 0);
 	}
 } else version(Windows) {
-	// The MS C runtime calls a `SIGABRT` handler as an ordinary function from
-	// inside `abort`, rather than through the operating system's signal
-	// machinery, so leaving it is an ordinary `longjmp` rather than a
-	// `siglongjmp`. `jmp_buf`'s layout is not ours to know -- it is 256 bytes
-	// on x86-64 and smaller elsewhere -- hence the generous reserve, and
-	// handing `_setjmp` a null frame is the documented way to ask for a plain
-	// register restore instead of an SEH unwind.
+	// The MS C runtime calls the handler from inside `abort`, so a plain `longjmp` leaves it; x86-64's `jmp_buf`, the largest, is 256 bytes.
 	private __gshared align(16) ubyte[512] abortEscape;
 
-	private extern(C) @nogc nothrow {
+	private extern(C) {
 		int _setjmp(void* buffer, void* frame);
 		void longjmp(void* buffer, int value);
 	}
 
-	// `core.stdc.signal` declares `signal` without `@nogc nothrow`, which this
-	// module is, so bind it here instead. `SIGABRT` is 22 on Windows.
+	// `core.stdc.signal` declares `signal` without `@nogc nothrow`, so bind it here. `SIGABRT` is 22 on Windows.
 	private alias AbortHandler = extern(C) void function(int) @nogc nothrow;
-	private extern(C) @nogc nothrow AbortHandler signal(int sig, AbortHandler handler);
+	private extern(C) AbortHandler signal(int sig, AbortHandler handler);
 	private enum int SIGABRT = 22;
 
-	/// Ditto
 	private alias SavedAbortHandler = AbortHandler;
 
 	private void installAbortHandler(out SavedAbortHandler saved) {
@@ -94,41 +70,27 @@ version(Posix) {
 	}
 
 	private void restoreAbortHandler(ref SavedAbortHandler saved) {
-		signal(SIGABRT, saved);
+		cast(void) signal(SIGABRT, saved);
 	}
 }
 
 private extern(C) void onAbort(int) @nogc nothrow {
-	// Windows resets a handler to the default as it raises, so a test whose
-	// second `fatal` mattered would find nothing installed. Putting it back
-	// here rather than in `aborts` keeps one arming good for any number of
-	// aborts. POSIX `sigaction` does not reset, so this is a no-op there.
-	version(Windows) signal(SIGABRT, &onAbort);
+	// Windows resets a handler to the default as it raises, so reinstall it to keep one arming good for any number of aborts.
+	version(Windows) cast(void) signal(SIGABRT, &onAbort);
 	version(Posix) siglongjmp(abortEscape.ptr, 1);
 	else version(Windows) longjmp(abortEscape.ptr, 1);
 }
 
-/**
-* Runs `attempt` and reports whether it reached `mizu.exception.fatal`.
-*
-* `fatal` aborts the process, so the only way to watch a misuse being caught
-* is to catch the `SIGABRT` and jump back out of the handler; the unit test in
-* `mizu.exception` explains why that leaves the process unharmed. The
-* abandoned VM frames do not leak, because Mizu's dispatch tail-calls and so
-* only ever occupies the one frame.
-*/
+// Runs `attempt` and reports whether it reached `mizu.error.fatal`; tail-call dispatch means the abandoned VM occupied only one frame.
 private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
 	SavedAbortHandler saved;
 	installAbortHandler(saved);
 
-	// `setjmp` records the frame it was called from, so it has to be called
-	// from the frame being returned to: spelled out here rather than hidden
-	// behind a helper that would have returned before the jump arrived.
+	// `setjmp` records the frame it was called from, so it must be called here, in the frame being returned to.
 	version(Posix) immutable landed = sigsetjmpByPointer(abortEscape.ptr, 1) != 0;
 	else version(Windows) immutable landed = _setjmp(abortEscape.ptr, null) != 0;
 
-	// `__gshared` because a local's value across a `longjmp` is whatever the
-	// optimiser left in its register.
+	// `__gshared` because a local's value across a `longjmp` is whatever the optimiser left in its register.
 	__gshared bool aborted;
 	aborted = true;
 	if (!landed) {
@@ -138,29 +100,13 @@ private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
 
 	restoreAbortHandler(saved);
 
-	// Jumping out of the handler abandons the VM part way through a
-	// program, so `startFromEnvironment` never reached its own cleanup.
-	// The coroutine scheduler's context list is global, and a leftover
-	// context points at the abandoned run's stack frame, which the next
-	// program would then be scheduled into.
+	// The jump skipped `startFromEnvironment`'s cleanup, and a leftover coroutine context would point into the abandoned run's frame.
 	static if (noHardwareThreads) Coroutine.clear();
 
 	return aborted;
 }
 
-/*
-* The host functions the FFI tests call back into.
-*
-* They are `export`ed because a Mizu program reaches the host through library
-* handle zero, which is "look in the executable itself": on Windows that is
-* `GetProcAddress` against the executable's export table, so a symbol has to
-* be named there to be found at all. On POSIX `--export-dynamic` (see the
-* `unittest` configuration in `dub.json`) publishes them the same way.
-*
-* Using Mizu's own symbols rather than the C library's is what makes these
-* tests platform independent: `strlen` and friends live in the process on
-* every platform, but only POSIX lets the executable hand them out again.
-*/
+// Host functions the FFI tests call through library handle zero, the executable itself; exported so Windows' `GetProcAddress` finds them too.
 export extern(C) {
 	/// A pointer in and a `u64` out.
 	ulong mizuTestLength(const(char)* text) @nogc nothrow {
@@ -171,12 +117,11 @@ export extern(C) {
 	/// An `i32` in and an `i32` out, for the signed 32 bit call path.
 	int mizuTestNegate(int value) @nogc nothrow { return -value; }
 
-	/// A pointer in and nothing out, for the call path that has no result.
-	/// It counts its calls, so a test can tell that it really ran.
+	/// A pointer in and nothing out, for the call path that has no result; it counts its calls, so a test can tell it really ran.
 	void mizuTestDiscard(void*) @nogc nothrow { ++mizuTestDiscardCalls; }
 }
 
-/// How many times `mizuTestDiscard` has been called.
+// How many times `mizuTestDiscard` has been called.
 private __gshared uint mizuTestDiscardCalls = 0;
 
 unittest {
@@ -201,8 +146,7 @@ unittest {
 }
 
 unittest {
-	// A 32 bit immediate really does survive both halves, and the upper
-	// immediate lands in the top 32 bits.
+	// A 32 bit immediate really does survive both halves, and the upper immediate lands in the top 32 bits.
 	static immutable Opcode[3] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0xDEADBEEF),
 		Opcode(&loadUpperImmediate, Registers.t(0)).setImmediate(0xCAFEBABE),
@@ -229,11 +173,18 @@ unittest {
 	RegistersAndStack env;
 	run(program[], env);
 	assert(env.memory[Registers.t(2)] == 0x1234);
+
+	// With nothing pushed, a store at the stack pointer would write past the end of memory, so it aborts.
+	static immutable Opcode[2] overflow = [
+		Opcode(&stackStoreU64, 0, Registers.t(0), Registers.zero),
+		Opcode(&halt),
+	];
+	RegistersAndStack empty;
+	assert(aborts({ run(overflow[], empty); }));
 }
 
 unittest {
-	// A counted loop, exercising comparison + backward branch:
-	// t0 = 0; do { t0 += 1 } while (t0 < 10)
+	// A counted loop, exercising comparison + backward branch: t0 = 0; do { t0 += 1 } while (t0 < 10)
 	static immutable Opcode[6] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 		Opcode(&loadImmediate, Registers.t(1)).setImmediate(1),
@@ -317,7 +268,7 @@ unittest {
 	assert(env.memory[Registers.a(0)] == 42);
 }
 
-/// The D port of `tests/fib.cpp`: recursive fib(n) through Mizu's own stack.
+// The D port of `tests/fib.cpp`: recursive fib(n) through Mizu's own stack.
 private immutable Opcode[30] fibProgram = [
 	Opcode(&findLabel, 200).setImmediate(label2immediate("fib")),
 	// a0 = fib(a0)
@@ -335,11 +286,11 @@ private immutable Opcode[30] fibProgram = [
 	Opcode(&jumpTo, 0, Registers.ra),
 	// save ra, a2, a3
 	Opcode(&stackPushImmediate, 0).setImmediate(24),
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-	Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
-	Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+	Opcode(&stackStoreU64, 0, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+	Opcode(&stackStoreU64, 0, Registers.a(2), Registers.t(0)),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 	Opcode(&stackStoreU64, 0, Registers.a(3), Registers.t(0)),
 	// a2 = a0 - 1
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
@@ -357,15 +308,15 @@ private immutable Opcode[30] fibProgram = [
 	// a0 = a2 + a0
 	Opcode(&add, Registers.a(0), Registers.a(2), Registers.a(0)),
 	// restore ra, a2, a3
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
-	Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(16),
+	Opcode(&stackLoadU64, Registers.ra, Registers.t(0)),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
 	Opcode(&stackLoadU64, Registers.a(2), Registers.t(0)),
 ];
 
-/// Ditto (split only because a 34-entry literal is easier to read in two halves)
+// The rest of `fibProgram`, split off because a 34-entry literal reads more easily in two halves.
 private immutable Opcode[4] fibProgramTail = [
-	Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+	Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 	Opcode(&stackLoadU64, Registers.a(3), Registers.t(0)),
 	Opcode(&stackPopImmediate).setImmediate(24),
 	Opcode(&jumpTo, 0, Registers.ra), // return
@@ -381,36 +332,28 @@ unittest {
 		RegistersAndStack env;
 		setupEnvironment(env, program[]);
 		env.memory[Registers.a(0)] = n;
-		startFromEnvironment(program[], env);
+		assert(startFromEnvironment(program[], env) is null);
 		assert(env.memory[Registers.a(0)] == expected[n]);
 	}
 }
 
 unittest {
-	// A deep recursion, to prove the tail-call dispatch really does reuse one
-	// stack frame: fib(27) is ~600k instruction dispatches.
+	// A deep recursion, to prove the tail-call dispatch really does reuse one stack frame: fib(27) is ~600k instruction dispatches.
 	static immutable Opcode[34] program = fibProgram ~ fibProgramTail;
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
 	env.memory[Registers.a(0)] = 27;
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 	assert(env.memory[Registers.a(0)] == 196_418);
 }
 
 private immutable ulong[10] unsorted = [179, 1630, 754, 259, 858, 970, 310, 1612, 1269, 1000];
 
 unittest {
-	// The D port of `tests/bubble.cpp`, shortened: bubble sort an array that
-	// has been copied onto Mizu's stack via the unsafe pointer instructions,
-	// then check it really is sorted.
-	//
-	// Note: the C++ original's inner loop guard is `i >= size`, but the pair it
-	// compares is (i, i + 1), so it reads and writes one element past the array
-	// it was given. The guard here is `i >= size - 1`, held in register 205.
+	// `tests/bubble.cpp`: bubble sort a stack array, guarded by `i >= size - 1` in x205, as the C++ original's `i >= size` overran it.
 
-	// Host pointer immediates are not compile-time constants, so unlike the
-	// other programs here this one is built at run time.
+	// Host pointer immediates are not compile-time constants, so this program is built at run time.
 	Opcode[36] program = [
 		Opcode(&findLabel, 200).setImmediate(label2immediate("bub")),   // outer loop
 		Opcode(&findLabel, 201).setImmediate(label2immediate("innr")),  // inner loop
@@ -461,7 +404,7 @@ unittest {
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 
 	// The sorted array is still on the stack, size * 8 bytes above the bottom.
 	auto sorted = cast(const(ulong)*)(env.stackBottom - unsorted.length * ulong.sizeof);
@@ -495,8 +438,7 @@ unittest {
 }
 
 unittest {
-	// unsafe.pointerStore* / pointerLoad* reach the same bytes a stack store
-	// wrote, at every width, through an address rather than an offset.
+	// unsafe.pointerStore* / pointerLoad* reach the same bytes a stack store wrote, at every width, through an address rather than an offset.
 	static immutable Opcode[16] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(32),
 		Opcode(&stackPush, 0, Registers.t(0), 0),
@@ -504,8 +446,7 @@ unittest {
 		Opcode(&loadImmediate, Registers.t(2)).setImmediate(0),
 		Opcode(&pointerToStack, Registers.t(1), Registers.t(2)),
 
-		// A different value at each width, each 8 bytes apart so the narrow
-		// stores cannot overlap one another.
+		// A different value at each width, each 8 bytes apart so the narrow stores cannot overlap one another.
 		Opcode(&loadImmediate, Registers.t(3)).setImmediate(0x0BADF00D),
 		Opcode(&pointerStoreU64, 0, Registers.t(3), Registers.t(1)),
 
@@ -519,8 +460,7 @@ unittest {
 		Opcode(&loadImmediate, Registers.t(7)).setImmediate(0x7F),
 		Opcode(&pointerStoreU8, 0, Registers.t(7), Registers.t(6)),
 
-		// Read the 64 bit one back the way `stack_load_u64` would not be able
-		// to: through the address itself.
+		// Read the 64 bit one back the way `stack_load_u64` would not be able to: through the address itself.
 		Opcode(&pointerLoadU64, Registers.t(8), Registers.t(1)),
 		Opcode(&halt),
 	];
@@ -528,31 +468,25 @@ unittest {
 	RegistersAndStack env;
 	run(program[], env);
 	assert(env.memory[Registers.t(8)] == 0x0BADF00D);
-	// The two narrow stores wrote where their addresses said, and the store's
-	// `out_` of 0 discarded the extra copy rather than clobbering anything.
+	// The two narrow stores wrote where their addresses said, and the store's `out_` of 0 discarded the extra copy rather than clobbering anything.
 	assert(env.memory[Registers.t(4)] == env.memory[Registers.t(1)] + 8);
 	assert(env.memory[Registers.t(6)] == env.memory[Registers.t(1)] + 16);
 }
 
 unittest {
-	// A pointer load narrower than 64 bits reads only its own width, and a
-	// store of the same width leaves the bytes above it alone.
+	// A pointer load narrower than 64 bits reads only its own width, and a store of the same width leaves the bytes above it alone.
 	static immutable Opcode[12] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
 		Opcode(&allocate, Registers.t(1), Registers.t(0)),
 
-		// Fill all eight bytes, then overwrite the low two. Both halves of the
-		// pattern explicitly: a Mizu immediate is 32 bits, so the fresh
-		// allocation's top four bytes would otherwise stay uninitialized and
-		// the `u64` read below would be checking heap residue.
+		// Fill all eight bytes, both 32 bit halves explicitly so the `u64` read is not checking heap residue, then overwrite the low two.
 		Opcode(&loadImmediate, Registers.t(2)).setImmediate(0xAAAAAAAA),
 		Opcode(&loadUpperImmediate, Registers.t(2)).setImmediate(0xAAAAAAAA),
 		Opcode(&pointerStoreU64, 0, Registers.t(2), Registers.t(1)),
 		Opcode(&loadImmediate, Registers.t(3)).setImmediate(0x1234),
 		Opcode(&pointerStoreU16, Registers.t(4), Registers.t(3), Registers.t(1)),
 
-		// u16 sees the overwrite, u32 sees it beside the byte above it, and
-		// u64 still has the top half of the original.
+		// u16 sees the overwrite, u32 sees it beside the byte above it, and u64 still has the top half of the original.
 		Opcode(&pointerLoadU16, Registers.t(5), Registers.t(1)),
 		Opcode(&pointerLoadU32, Registers.t(6), Registers.t(1)),
 		Opcode(&pointerLoadU64, Registers.t(7), Registers.t(1)),
@@ -629,10 +563,7 @@ unittest {
 }
 
 unittest {
-	// A real foreign call: `mizuTestLength("Hello 世界")` through libffi.
-	//
-	// Register zero is the library handle, which the loader reads as "look in
-	// the host executable", so the function is found without naming a library.
+	// `mizuTestLength("Hello 世界")` through libffi, found through library handle zero, the host executable.
 	import mizu.ffi;
 
 	static immutable char[13] subject = "Hello 世界\0"; // 12 bytes plus terminator
@@ -660,7 +591,7 @@ unittest {
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 
 	assert(env.memory[202] != 0);                  // Found the function.
 	assert(env.memory[Registers.t(0)] == 12);      // And it counted the bytes.
@@ -668,10 +599,7 @@ unittest {
 }
 
 unittest {
-	// The FFI's void-returning call path. `mizuTestDiscard` ignores its
-	// argument and has no result, so the only evidence it ran is the counter
-	// it keeps -- which is the point: the call path being exercised is the one
-	// that hands libffi a null return slot.
+	// The void call path, which hands libffi a null return slot; `mizuTestDiscard`'s counter is the only evidence it ran.
 	import mizu.ffi;
 
 	static immutable char[18] symbol = "mizuTestDiscard\0\0\0";
@@ -693,7 +621,7 @@ unittest {
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 
 	assert(env.memory[202] != 0);                       // Found the function.
 	assert(mizuTestDiscardCalls == before + 1);         // And it really ran.
@@ -701,10 +629,7 @@ unittest {
 }
 
 unittest {
-	// The bitwise, shift and signed-comparison instructions.
-	//
-	// `loadImmediate` zero extends, so the negative values are built as a
-	// low half plus an all-ones upper half.
+	// Bitwise, shift and signed comparisons; `loadImmediate` zero extends, so negative values add an all-ones upper half.
 	static immutable Opcode[16] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0b1100),
 		Opcode(&loadImmediate, Registers.t(1)).setImmediate(0b1010),
@@ -747,9 +672,7 @@ unittest {
 }
 
 unittest {
-	// The width conversions. Only `convertToU64` replaces the whole register;
-	// the narrower ones overwrite just the bottom of their destination, so
-	// each destination starts out as all ones to show how much survives.
+	// The width conversions; the narrow ones overwrite only the bottom of their destination, so each starts all ones to show what survives.
 	static immutable Opcode[15] program = [
 		// t0 = 0xCAFEBABE_DEADBEEF
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0xDEADBEEF),
@@ -781,9 +704,7 @@ unittest {
 }
 
 unittest {
-	// The 32, 16 and 8 bit stack moves, which the other programs here only
-	// exercise at 64 bits. Each store writes the bottom of `t0` and each load
-	// reads it straight back.
+	// The 32, 16 and 8 bit stack moves: each store writes the bottom of `t0` and each load reads it straight back.
 	static immutable Opcode[12] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(0x12345678),
 		Opcode(&stackPushImmediate).setImmediate(8),
@@ -813,8 +734,7 @@ unittest {
 }
 
 unittest {
-	// The three unconditional/conditional relative jumps. `t0` stays zero
-	// because every instruction that would change it is jumped over.
+	// The three unconditional/conditional relative jumps. `t0` stays zero because every instruction that would change it is jumped over.
 	static immutable Opcode[19] program = [
 		/*  0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 		/*  1 */ Opcode(&loadImmediate, Registers.t(1)).setImmediate(3),
@@ -853,9 +773,7 @@ unittest {
 }
 
 unittest {
-	// The register (rather than immediate) forms of push and pop, plus
-	// `offsetOfStackBottom`: the value it produces is the offset that makes
-	// `stackLoadU64` read the place `pointerToStackBottom` would point at.
+	// Register push and pop, plus `offsetOfStackBottom`, whose offset makes `stackLoadU64` read where `pointerToStackBottom` points.
 	static immutable Opcode[10] program = [
 		/* 0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(24),
 		/* 1 */ Opcode(&stackPush, 0, Registers.t(0)),      // sp = bottom - 24
@@ -877,8 +795,7 @@ unittest {
 }
 
 unittest {
-	// `findLabel` searches forward first and only then backward, so a label
-	// that is behind the search is found by the second pass.
+	// `findLabel` searches forward first and only then backward, so a label that is behind the search is found by the second pass.
 	static immutable Opcode[4] program = [
 		/* 0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
 		/* 1 */ Opcode(&label).setImmediate(label2immediate("bak")),
@@ -902,10 +819,7 @@ unittest {
 }
 
 unittest {
-	// The backward search used to stop *at* the start of the program rather
-	// than after examining it, so a label sitting on the very first
-	// instruction - where the top of a loop naturally goes - was unfindable,
-	// and `findLabel` reported the 0 that `jumpTo` then jumped to.
+	// The backward search must examine the program's first instruction, where a loop's top label naturally sits, not stop before it.
 	static immutable Opcode[4] program = [
 		/* 0 */ Opcode(&label).setImmediate(label2immediate("top")),
 		/* 1 */ Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("top")),
@@ -920,8 +834,7 @@ unittest {
 }
 
 unittest {
-	// The debug instructions print to stdout and report how many characters
-	// they wrote, so a non-zero result means the register really was printed.
+	// The debug instructions print to stdout and report how many characters they wrote, so a non-zero result means the register really was printed.
 	static immutable Opcode[4] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(42),
 		Opcode(&debugPrint, Registers.t(1), Registers.t(0)),
@@ -997,12 +910,7 @@ unittest {
 }
 
 unittest {
-	// The `f64` arithmetic, conversions, comparisons and predicates. An f64
-	// immediate does not fit in one opcode, so each constant is loaded as a
-	// low half followed by an upper half.
-	//
-	// There are only 20 temporaries, so the results go in the argument
-	// registers.
+	// The `f64` instructions, each constant loaded in two halves, with results in argument registers since there are only 20 temporaries.
 	static immutable Opcode[33] program = [
 		Opcode(&loadImmediate, Registers.t(0)).setLowerImmediateF64(7.5),
 		Opcode(&loadUpperImmediate, Registers.t(0)).setUpperImmediateF64(7.5),
@@ -1083,8 +991,7 @@ unittest {
 }
 
 unittest {
-	// The rest of the unsafe instructions: the fat pointer allocator, the
-	// immediate forms of copy/set, and a pointer to the bottom of the stack.
+	// The rest of the unsafe instructions: the fat pointer allocator, the immediate forms of copy/set, and a pointer to the bottom of the stack.
 	static immutable Opcode[24] program = [
 		/*  0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),  // element size
 		/*  1 */ Opcode(&loadImmediate, Registers.t(1)).setImmediate(4),  // element count
@@ -1126,8 +1033,7 @@ unittest {
 }
 
 unittest {
-	// The two relative `fork` instructions, each starting a worker that
-	// reports back down a shared channel.
+	// The two relative `fork` instructions, each starting a worker that reports back down a shared channel.
 	static immutable Opcode[17] program = [
 		/*  0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(2),
 		/*  1 */ Opcode(&channelCreate, 220, Registers.t(0)),
@@ -1163,8 +1069,7 @@ unittest {
 }
 
 unittest {
-	// The blocking (rather than "try") mutex locks. Nothing else holds this
-	// mutex, so each lock is taken immediately.
+	// The blocking (rather than "try") mutex locks. Nothing else holds this mutex, so each lock is taken immediately.
 	static immutable Opcode[7] program = [
 		Opcode(&mutexCreate, Registers.t(0)),
 		Opcode(&mutexWriteLock, 0, Registers.t(0)),
@@ -1181,8 +1086,7 @@ unittest {
 }
 
 unittest {
-	// Every remaining `pushType*`, emptied again with `clearTypeStack` so the
-	// stack is left the way the other FFI tests expect to find it.
+	// Every remaining `pushType*`, emptied again with `clearTypeStack` so the stack is left the way the other FFI tests expect to find it.
 	import mizu.ffi;
 
 	static immutable Opcode[9] program = [
@@ -1222,7 +1126,7 @@ unittest {
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 
 	assert(env.memory[202] != 0);                        // Found the function.
 	assert(cast(int) env.memory[Registers.t(0)] == 5);   // And it changed the sign.
@@ -1230,12 +1134,7 @@ unittest {
 }
 
 unittest {
-	// The two library-loading instructions: one name that cannot resolve, and
-	// a list in which the C library is found under whichever name fits.
-	//
-	// Every platform has a C library under one of these names, and neither
-	// spelling is a path, so this also exercises the loader's search rather
-	// than just opening a file.
+	// Library loading: a name that cannot resolve, and a list of non-path names holding the C library, exercising the loader's search.
 	import mizu.ffi;
 
 	version(Windows) {
@@ -1263,17 +1162,16 @@ unittest {
 
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
-	startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 
 	assert(env.memory[Registers.t(0)] != 0); // One of the two names loaded.
 	assert(env.memory[Registers.t(2)] == 0); // And the nonexistent one did not.
 
-	close(cast(Library*) env.memory[Registers.t(0)]);
+	assert(close(cast(Library*) env.memory[Registers.t(0)]));
 }
 
 unittest {
-	// An interface has to describe at least a return type, so building one
-	// from an empty type stack is fatal.
+	// An interface has to describe at least a return type, so building one from an empty type stack is fatal.
 	import mizu.ffi;
 
 	static immutable Opcode[3] program = [
@@ -1287,20 +1185,18 @@ unittest {
 }
 
 unittest {
-	// A foreign call reads its arguments straight out of the argument
-	// registers into a fixed array of 128 pointers, so a signature wider than
-	// that is fatal — before the function pointer (here, null) is ever used.
+	// A signature wider than the argument registers is fatal, before the function pointer (here, null) is ever used.
 	import mizu.ffi;
 
-	enum size_t argumentCount = 129;
-	Opcode[argumentCount + 5] program;
+	enum size_t tooMany = argumentCount + 1;
+	Opcode[tooMany + 5] program;
 	program[0] = Opcode(&clearTypeStack);
 	program[1] = Opcode(&pushTypeU64); // the return type
-	foreach (i; 0 .. argumentCount)
+	foreach (i; 0 .. tooMany)
 		program[2 + i] = Opcode(&pushTypeU64);
-	program[2 + argumentCount] = Opcode(&createInterface, 201);
-	program[3 + argumentCount] = Opcode(&call, 0, 0, 201);
-	program[4 + argumentCount] = Opcode(&halt);
+	program[2 + tooMany] = Opcode(&createInterface, 201);
+	program[3 + tooMany] = Opcode(&call, 0, 0, 201);
+	program[4 + tooMany] = Opcode(&halt);
 
 	RegistersAndStack env;
 	assert(aborts({ run(program[], env); }));
@@ -1308,17 +1204,7 @@ unittest {
 
 static if (noHardwareThreads)
 unittest {
-	// The coroutine scheduler's back-pressure, which only shows up when two
-	// contexts really do compete: a `channelSend` to a channel that is
-	// already full, and a `joinThread` on a context that has not halted yet.
-	// Both rewind their program counter and yield rather than blocking, so
-	// the only way to reach them is to make the other context late.
-	//
-	// The channel holds one value. The worker idles for a few instructions
-	// before its first receive, which is long enough for the main context to
-	// fill the channel and find its second send with nowhere to put a value.
-	// Contexts alternate one instruction at a time, so this is deterministic
-	// rather than a race.
+	// Coroutine back-pressure: the worker idles, so main deterministically fills the channel, then `channelSend` and `joinThread` rewind and yield.
 	enum Reg data = 220, worker = 221, results = 222;
 	enum Opcode nop = Opcode(&add, 0, 0, 0); // Writes x0, which stays zero.
 
@@ -1359,8 +1245,7 @@ unittest {
 	RegistersAndStack env;
 	run(program[], env);
 
-	// Every value crossed the channel, in order, despite it never holding
-	// more than one of them at a time.
+	// Every value crossed the channel, in order, despite it never holding more than one of them at a time.
 	assert(env.memory[Registers.t(2)] == 11 + 22 + 33);
 	assert(env.memory[worker] == 0);  // joinThread cleared the handle.
 	assert(env.memory[data] == 0);    // And both channels are closed.
@@ -1369,11 +1254,7 @@ unittest {
 
 static if (noHardwareThreads)
 unittest {
-	// The failing half of the coroutine try-locks. With the fallback the
-	// lock state is the register itself, so a context can watch its own
-	// mutex refuse a second lock; with hardware threads the same program
-	// would relock a `pthread_rwlock` it already holds, which POSIX leaves
-	// undefined, hence the `static if`.
+	// Coroutine try-locks refusing: the register is the lock, so a context sees its own mutex refuse; relocking a `pthread_rwlock` is undefined.
 	static immutable Opcode[10] program = [
 		/* 0 */ Opcode(&mutexCreate, Registers.t(0)),
 		/* 1 */ Opcode(&mutexTryWriteLock, Registers.t(1), Registers.t(0)),
@@ -1402,22 +1283,7 @@ unittest {
 
 static if (noHardwareThreads)
 unittest {
-	// The blocking halves of the coroutine locks: `mutexWriteLock` and
-	// `mutexReadLock` finding the lock already held, rewinding and yielding.
-	//
-	// With the fallback there is no OS mutex — the register itself is the lock
-	// state — and forking copies the whole register file, so a second context
-	// cannot release what the first holds through the mutex instructions (see
-	// the note on `mutexCreate`). What it can do is write to the first
-	// context's register file directly: `pointerToRegister` takes the address
-	// of the lock register before the fork, so the worker inherits a pointer
-	// to the *main* context's copy and can clear it.
-	//
-	// Contexts alternate one instruction at a time, so the interleaving below
-	// is deterministic rather than a race. Reading down the two columns:
-	//
-	//   main 5 blocks [w] | wrk 13 clears | main 5 takes it | wrk 14 idles
-	//   main 6 blocks [r] | wrk 15 clears | main 6 takes it | wrk 16 halts
+	// Coroutine blocking locks yield until the worker clears main's lock register, through a `pointerToRegister` address taken before the fork.
 	enum Reg lock = Registers.t(0), address = Registers.t(1);
 	enum Reg witness = Registers.t(2), worker = 220;
 	enum Opcode nop = Opcode(&add, 0, 0, 0); // Writes x0, which stays zero.
@@ -1437,8 +1303,7 @@ unittest {
 		/* 10 */ Opcode(&mutexFree, 0, lock, 0),
 		/* 11 */ Opcode(&halt),
 
-		// wrk: clear the main context's lock register, twice, spaced so that
-		// each clear lands while main is waiting rather than before it starts.
+		// wrk: clear the main context's lock register, twice, spaced so that each clear lands while main is waiting rather than before it starts.
 		/* 12 */ Opcode(&label).setImmediate(label2immediate("wrk")),
 		/* 13 */ Opcode(&setMemoryImmediate, address, 0, 8),
 		/* 14 */ nop,
@@ -1454,7 +1319,7 @@ unittest {
 	assert(env.memory[lock] == 0);    // mutexFree cleared the lock register.
 }
 
-/// Runs the single atomic instruction `op` on register `a` holding `memory` and `b` holding `operand`, returning its `out_`, which starts as `out_`; `memory` is updated to what `a` ends up holding.
+// Runs atomic instruction `op` with `a` holding `memory` and `b` `operand`, returning `out_` and updating `memory` to `a`'s final value.
 private ulong atomically(Instruction op, ref ulong memory, ulong operand = 0, ulong out_ = 0) @trusted {
 	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
 	RegistersAndStack env;
@@ -1462,7 +1327,7 @@ private ulong atomically(Instruction op, ref ulong memory, ulong operand = 0, ul
 	env.memory[Registers.t(0)] = memory;
 	env.memory[Registers.t(1)] = operand;
 	env.memory[Registers.t(2)] = out_;
-	cast(void) startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 	memory = env.memory[Registers.t(0)];
 	return env.memory[Registers.t(2)];
 }
@@ -1470,7 +1335,7 @@ private ulong atomically(Instruction op, ref ulong memory, ulong operand = 0, ul
 unittest {
 	// Every atomic instruction's effect on its register and what it hands back in `out_`.
 	ulong memory = 5;
-	atomically(&atomicFence, memory);
+	assert(atomically(&atomicFence, memory) == 0);
 	assert(memory == 5);
 	assert(atomically(&atomicLoad, memory) == 5);
 	assert(atomically(&atomicStore, memory, 6) == 6 && memory == 6);
@@ -1495,7 +1360,7 @@ unittest {
 	assert(atomically(&atomicFetchMaxSigned, memory, 4) == ulong.max && memory == 4);
 }
 
-/// Runs the single pointer atomic instruction `op` with `a` pointing at `memory` and `b` holding `operand`, returning its `out_`, which starts as `out_`.
+// Runs pointer atomic instruction `op` with `a` pointing at `memory` and `b` holding `operand`, returning `out_`.
 private ulong atomicallyThrough(Instruction op, ref ulong memory, ulong operand = 0, ulong out_ = 0) @trusted {
 	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
 	RegistersAndStack env;
@@ -1503,7 +1368,7 @@ private ulong atomicallyThrough(Instruction op, ref ulong memory, ulong operand 
 	env.memory[Registers.t(0)] = cast(ulong) &memory;
 	env.memory[Registers.t(1)] = operand;
 	env.memory[Registers.t(2)] = out_;
-	cast(void) startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 	return env.memory[Registers.t(2)];
 }
 
@@ -1574,14 +1439,14 @@ version(MizuCoverage) {} else unittest {
 	assert(aborts(() @trusted { run(program[], env); }));
 }
 
-/// Runs the single checked instruction `op` on `a` and `b`, returning its `out_`.
+// Runs the single checked instruction `op` on `a` and `b`, returning its `out_`.
 private ulong checked(Instruction op, ulong a, ulong b = 0) @trusted {
 	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
 	RegistersAndStack env;
 	setupEnvironment(env, program[]);
 	env.memory[Registers.t(0)] = a;
 	env.memory[Registers.t(1)] = b;
-	cast(void) startFromEnvironment(program[], env);
+	assert(startFromEnvironment(program[], env) is null);
 	return env.memory[Registers.t(2)];
 }
 
