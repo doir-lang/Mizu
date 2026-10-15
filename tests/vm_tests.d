@@ -1453,3 +1453,183 @@ unittest {
 	assert(env.memory[worker] == 0);  // joinThread cleared the handle.
 	assert(env.memory[lock] == 0);    // mutexFree cleared the lock register.
 }
+
+/// Runs the single atomic instruction `op` on register `a` holding `memory` and `b` holding `operand`, returning its `out_`, which starts as `out_`; `memory` is updated to what `a` ends up holding.
+private ulong atomically(Instruction op, ref ulong memory, ulong operand = 0, ulong out_ = 0) @trusted {
+	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
+	RegistersAndStack env;
+	setupEnvironment(env, program[]);
+	env.memory[Registers.t(0)] = memory;
+	env.memory[Registers.t(1)] = operand;
+	env.memory[Registers.t(2)] = out_;
+	cast(void) startFromEnvironment(program[], env);
+	memory = env.memory[Registers.t(0)];
+	return env.memory[Registers.t(2)];
+}
+
+unittest {
+	// Every atomic instruction's effect on its register and what it hands back in `out_`.
+	ulong memory = 5;
+	atomically(&atomicFence, memory);
+	assert(memory == 5);
+	assert(atomically(&atomicLoad, memory) == 5);
+	assert(atomically(&atomicStore, memory, 6) == 6 && memory == 6);
+	assert(atomically(&atomicExchange, memory, 7) == 6 && memory == 7);
+
+	// A compare-exchange stores only when `out_` matches, and returns what it found either way.
+	assert(atomically(&atomicCompareExchange, memory, 9, 8) == 7 && memory == 7);
+	assert(atomically(&atomicCompareExchange, memory, 9, 7) == 7 && memory == 9);
+
+	assert(atomically(&atomicFetchAdd, memory, 3) == 9 && memory == 12);
+	assert(atomically(&atomicFetchSubtract, memory, 13) == 12 && memory == ulong.max);
+	assert(atomically(&atomicFetchAnd, memory, 0b1100) == ulong.max && memory == 0b1100);
+	assert(atomically(&atomicFetchOr, memory, 0b1010) == 0b1100 && memory == 0b1110);
+	assert(atomically(&atomicFetchXor, memory, 0b1010) == 0b1110 && memory == 0b0100);
+
+	// Unsigned min and max see -1 as the largest value; the signed ones as smaller than 4.
+	assert(atomically(&atomicFetchMax, memory, -1L) == 4 && memory == ulong.max);
+	assert(atomically(&atomicFetchMin, memory, 4) == ulong.max && memory == 4);
+	assert(atomically(&atomicFetchMaxSigned, memory, -1L) == 4 && memory == 4);
+	assert(atomically(&atomicFetchMinSigned, memory, -1L) == 4 && memory == ulong.max);
+	assert(atomically(&atomicFetchMinSigned, memory, 4) == ulong.max && memory == ulong.max);
+	assert(atomically(&atomicFetchMaxSigned, memory, 4) == ulong.max && memory == 4);
+}
+
+/// Runs the single pointer atomic instruction `op` with `a` pointing at `memory` and `b` holding `operand`, returning its `out_`, which starts as `out_`.
+private ulong atomicallyThrough(Instruction op, ref ulong memory, ulong operand = 0, ulong out_ = 0) @trusted {
+	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
+	RegistersAndStack env;
+	setupEnvironment(env, program[]);
+	env.memory[Registers.t(0)] = cast(ulong) &memory;
+	env.memory[Registers.t(1)] = operand;
+	env.memory[Registers.t(2)] = out_;
+	cast(void) startFromEnvironment(program[], env);
+	return env.memory[Registers.t(2)];
+}
+
+unittest {
+	// The pointer twins do the same to the memory they are pointed at.
+	ulong memory = 5;
+	assert(atomicallyThrough(&atomicLoadPointer, memory) == 5);
+	assert(atomicallyThrough(&atomicStorePointer, memory, 6) == 6 && memory == 6);
+	assert(atomicallyThrough(&atomicExchangePointer, memory, 7) == 6 && memory == 7);
+
+	assert(atomicallyThrough(&atomicCompareExchangePointer, memory, 9, 8) == 7 && memory == 7);
+	assert(atomicallyThrough(&atomicCompareExchangePointer, memory, 9, 7) == 7 && memory == 9);
+
+	assert(atomicallyThrough(&atomicFetchAddPointer, memory, 3) == 9 && memory == 12);
+	assert(atomicallyThrough(&atomicFetchSubtractPointer, memory, 13) == 12 && memory == ulong.max);
+	assert(atomicallyThrough(&atomicFetchAndPointer, memory, 0b1100) == ulong.max && memory == 0b1100);
+	assert(atomicallyThrough(&atomicFetchOrPointer, memory, 0b1010) == 0b1100 && memory == 0b1110);
+	assert(atomicallyThrough(&atomicFetchXorPointer, memory, 0b1010) == 0b1110 && memory == 0b0100);
+
+	assert(atomicallyThrough(&atomicFetchMaxPointer, memory, -1L) == 4 && memory == ulong.max);
+	assert(atomicallyThrough(&atomicFetchMinPointer, memory, 4) == ulong.max && memory == 4);
+	assert(atomicallyThrough(&atomicFetchMaxSignedPointer, memory, -1L) == 4 && memory == 4);
+	assert(atomicallyThrough(&atomicFetchMinSignedPointer, memory, -1L) == 4 && memory == ulong.max);
+	assert(atomicallyThrough(&atomicFetchMinSignedPointer, memory, 4) == ulong.max && memory == ulong.max);
+	assert(atomicallyThrough(&atomicFetchMaxSignedPointer, memory, 4) == ulong.max && memory == 4);
+}
+
+unittest {
+	// Two threads hammer one counter through a pointer; a lost update would leave it short.
+	enum ulong iterations = 10_000;
+	static immutable Opcode[16] program = [
+		/*  0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(8),
+		/*  1 */ Opcode(&allocate, Registers.t(1), Registers.t(0)),
+		/*  2 */ Opcode(&pointerStoreU64, 0, Registers.zero, Registers.t(1)),
+		/*  3 */ Opcode(&forkRelativeImmediate, Registers.t(2)).setImmediateSigned(7), // -> 10
+		/*  4 */ Opcode(&forkRelativeImmediate, Registers.t(3)).setImmediateSigned(6), // -> 10
+		/*  5 */ Opcode(&joinThread, 0, Registers.t(2), 0),
+		/*  6 */ Opcode(&joinThread, 0, Registers.t(3), 0),
+		/*  7 */ Opcode(&atomicLoadPointer, Registers.t(4), Registers.t(1)),
+		/*  8 */ Opcode(&freeAllocated, 0, Registers.t(1), 0),
+		/*  9 */ Opcode(&halt),
+
+		// worker: add one to the shared counter `iterations` times.
+		/* 10 */ Opcode(&loadImmediate, Registers.t(5)).setImmediate(iterations),
+		/* 11 */ Opcode(&loadImmediate, Registers.t(6)).setImmediate(1),
+		/* 12 */ Opcode(&atomicFetchAddPointer, Registers.t(7), Registers.t(1), Registers.t(6)),
+		/* 13 */ Opcode(&subtract, Registers.t(5), Registers.t(5), Registers.t(6)),
+		/* 14 */ Opcode(&branchRelativeImmediate, Registers.t(7), Registers.t(5)).setBranchImmediate(-2),
+		/* 15 */ Opcode(&halt),
+	];
+
+	RegistersAndStack env;
+	run(program[], env);
+	assert(env.memory[Registers.t(4)] == 2 * iterations);
+}
+
+// The coverage build's asserts throw rather than abort, so `aborts` cannot catch them there.
+version(MizuCoverage) {} else unittest {
+	// The pointer twins assert their address is aligned rather than tearing silently.
+	static immutable Opcode[4] program = [
+		Opcode(&pointerToRegister, Registers.t(1), Registers.t(0)),
+		Opcode(&loadImmediate, Registers.t(2)).setImmediate(1),
+		Opcode(&add, Registers.t(1), Registers.t(1), Registers.t(2)),
+		Opcode(&atomicLoadPointer, Registers.t(3), Registers.t(1)),
+	];
+
+	RegistersAndStack env;
+	assert(aborts(() @trusted { run(program[], env); }));
+}
+
+/// Runs the single checked instruction `op` on `a` and `b`, returning its `out_`.
+private ulong checked(Instruction op, ulong a, ulong b = 0) @trusted {
+	Opcode[2] program = [Opcode(op, Registers.t(2), Registers.t(0), Registers.t(1)), Opcode(&halt)];
+	RegistersAndStack env;
+	setupEnvironment(env, program[]);
+	env.memory[Registers.t(0)] = a;
+	env.memory[Registers.t(1)] = b;
+	cast(void) startFromEnvironment(program[], env);
+	return env.memory[Registers.t(2)];
+}
+
+unittest {
+	// Each checked instruction at the boundaries either side of overflow.
+	assert(checked(&addWouldOverflow, ulong.max, 1) == 1);
+	assert(checked(&addWouldOverflow, ulong.max - 1, 1) == 0);
+	assert(checked(&addWouldOverflow, ulong.max, 0) == 0);
+
+	assert(checked(&addWouldOverflowSigned, long.max, 1) == 1);
+	assert(checked(&addWouldOverflowSigned, long.min, -1L) == 1);
+	assert(checked(&addWouldOverflowSigned, -1L, 1) == 0);
+	assert(checked(&addWouldOverflowSigned, long.max, long.min) == 0);
+
+	assert(checked(&subtractWouldOverflow, 0, 1) == 1);
+	assert(checked(&subtractWouldOverflow, 1, 1) == 0);
+
+	assert(checked(&subtractWouldOverflowSigned, long.min, 1) == 1);
+	assert(checked(&subtractWouldOverflowSigned, long.max, -1L) == 1);
+	assert(checked(&subtractWouldOverflowSigned, 0, long.min) == 1);
+	assert(checked(&subtractWouldOverflowSigned, -1L, long.min) == 0);
+
+	assert(checked(&multiplyWouldOverflow, 1UL << 32, 1UL << 32) == 1);
+	assert(checked(&multiplyWouldOverflow, uint.max, uint.max) == 0);
+	assert(checked(&multiplyWouldOverflow, 0, ulong.max) == 0);
+
+	assert(checked(&multiplyWouldOverflowSigned, long.min, -1L) == 1);
+	assert(checked(&multiplyWouldOverflowSigned, 1L << 32, 1L << 31) == 1);
+	assert(checked(&multiplyWouldOverflowSigned, 1L << 32, -(1L << 31)) == 0); // Exactly long.min.
+	assert(checked(&multiplyWouldOverflowSigned, -1L, -1L) == 0);
+
+	assert(checked(&shiftLeftWouldOverflow, 1, 63) == 0);
+	assert(checked(&shiftLeftWouldOverflow, 2, 63) == 1);
+	assert(checked(&shiftLeftWouldOverflow, 1, 64) == 1);
+	assert(checked(&shiftLeftWouldOverflow, 1, ulong.max) == 1);
+	assert(checked(&shiftLeftWouldOverflow, 0, 64) == 0);
+
+	assert(checked(&shiftLeftWouldOverflowSigned, 1, 62) == 0);
+	assert(checked(&shiftLeftWouldOverflowSigned, 1, 63) == 1); // Lands on the sign bit.
+	assert(checked(&shiftLeftWouldOverflowSigned, -1L, 63) == 0); // Exactly long.min.
+	assert(checked(&shiftLeftWouldOverflowSigned, long.min, 1) == 1);
+	assert(checked(&shiftLeftWouldOverflowSigned, -1L, 64) == 1);
+	assert(checked(&shiftLeftWouldOverflowSigned, 0, 100) == 0);
+
+	assert(checked(&convertToU32WouldOverflow, uint.max) == 0);
+	assert(checked(&convertToU32WouldOverflow, uint.max + 1UL) == 1);
+	assert(checked(&convertToU16WouldOverflow, ushort.max) == 0);
+	assert(checked(&convertToU16WouldOverflow, ushort.max + 1) == 1);
+	assert(checked(&convertToU8WouldOverflow, ubyte.max) == 0);
+	assert(checked(&convertToU8WouldOverflow, ubyte.max + 1) == 1);
+}
