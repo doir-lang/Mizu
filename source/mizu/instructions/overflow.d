@@ -3,9 +3,9 @@
 *
 * Each sets `out_` to one if the matching core instruction, given the same `a` and `b`, would produce a result that does not fit in 64 bits, and to zero otherwise, so the result can feed a branch. The `Signed` variants treat both operands as two's complement.
 *
-* Unsigned `divide` and `modulus` cannot overflow; check `b` against zero with `setIfEqual` instead. Right shifts discard bits by design, so they have no check either.
+* Unsigned `divide` and `remainder` cannot overflow; check `b` against zero with `setIfEqual` instead. Right shifts discard bits by design, so they have no check either.
 */
-module mizu.instructions.checked;
+module mizu.instructions.overflow;
 
 static import core.checkedint;
 

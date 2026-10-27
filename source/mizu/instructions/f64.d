@@ -338,7 +338,7 @@ void* minF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&sqrtF64, Registers.t(1), Registers.t(0)),
+* 	Opcode(&squareRootF64, Registers.t(1), Registers.t(0)),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -348,7 +348,7 @@ void* minF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * assert(floatRegister!double(env.memory.ptr, Registers.t(1)) == 42);
 * ---
 */
-void* sqrtF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+void* squareRootF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = sqrt(mizu.instructions.f32.floatRegister!double(registers, pc.a));
 	mixin(mizuNext);
 }
@@ -521,7 +521,7 @@ void* setIfPositiveF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&setIfInfinityF64, Registers.t(1), Registers.t(0)),
+* 	Opcode(&setIfInfiniteF64, Registers.t(1), Registers.t(0)),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -531,8 +531,8 @@ void* setIfPositiveF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * assert(env.memory[Registers.t(1)] == 1);
 * ---
 */
-void* setIfInfinityF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = mizu.instructions.f32.floatIsInfinity(mizu.instructions.f32.floatRegister!double(registers, pc.a));
+void* setIfInfiniteF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = mizu.instructions.f32.floatIsInfinite(mizu.instructions.f32.floatRegister!double(registers, pc.a));
 	mixin(mizuNext);
 }
 

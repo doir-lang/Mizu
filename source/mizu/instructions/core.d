@@ -1174,7 +1174,7 @@ void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&modulus, Registers.t(2), Registers.t(0), Registers.t(1)),
+* 	Opcode(&remainder, Registers.t(2), Registers.t(0), Registers.t(1)),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -1185,7 +1185,7 @@ void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * assert(env.memory[Registers.t(2)] == 42);
 * ---
 */
-void* modulus(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+void* remainder(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] % registers[pc.b];
 	mixin(mizuNext);
 }

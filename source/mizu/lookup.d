@@ -40,7 +40,7 @@ static import mizu.instructions.f64;
 static import mizu.instructions.unsafe;
 static import mizu.instructions.parallel;
 static import mizu.instructions.atomic;
-static import mizu.instructions.checked;
+static import mizu.instructions.overflow;
 static if (!mizu.config.noFFI) static import mizu.ffi.instructions;
 
 @nogc nothrow:
@@ -75,7 +75,7 @@ private alias ownModules = AliasSeq!(
 	mizu.instructions.unsafe,
 	mizu.instructions.parallel,
 	mizu.instructions.atomic,
-	mizu.instructions.checked,
+	mizu.instructions.overflow,
 );
 
 static if (!mizu.config.noFFI)
