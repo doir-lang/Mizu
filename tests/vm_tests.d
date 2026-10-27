@@ -153,7 +153,7 @@ unittest {
 		Opcode(&loadImmediate, Registers.t(1)).setImmediate(2),
 		Opcode(&add, Registers.t(2), Registers.t(0), Registers.t(1)),
 		Opcode(&divide, Registers.t(3), Registers.t(0), Registers.t(1)),
-		Opcode(&modulus, Registers.t(4), Registers.t(0), Registers.t(1)),
+		Opcode(&remainder, Registers.t(4), Registers.t(0), Registers.t(1)),
 		Opcode(&halt),
 	];
 
@@ -252,10 +252,10 @@ unittest {
 		Opcode(&divideF32, Registers.t(3), Registers.t(0), Registers.t(0)),
 		Opcode(&divideF32, Registers.t(4), Registers.t(1), Registers.t(0)),
 		Opcode(&setIfNanF32, Registers.t(5), Registers.t(3)),
-		Opcode(&setIfInfinityF32, Registers.t(6), Registers.t(4)),
+		Opcode(&setIfInfiniteF32, Registers.t(6), Registers.t(4)),
 		Opcode(&setIfNegativeF32, Registers.t(7), Registers.t(2)),
 		Opcode(&setIfPositiveF32, Registers.t(8), Registers.t(1)),
-		Opcode(&sqrtF32, Registers.t(9), Registers.t(1)),
+		Opcode(&squareRootF32, Registers.t(9), Registers.t(1)),
 		Opcode(&halt),
 	];
 
@@ -947,7 +947,7 @@ unittest {
 		Opcode(&subtractF64, Registers.a(1), Registers.t(0), Registers.t(1)), // 5.0
 		Opcode(&maxF64, Registers.a(2), Registers.t(1), Registers.t(0)),      // 7.5
 		Opcode(&minF64, Registers.a(3), Registers.t(1), Registers.t(0)),      // 2.5
-		Opcode(&sqrtF64, Registers.a(4), Registers.a(1)),                     // sqrt(5)
+		Opcode(&squareRootF64, Registers.a(4), Registers.a(1)),                // sqrt(5)
 
 		Opcode(&setIfEqualF64, Registers.a(5), Registers.t(0), Registers.t(0)),
 		Opcode(&setIfNotEqualF64, Registers.a(6), Registers.t(0), Registers.t(1)),
@@ -963,9 +963,9 @@ unittest {
 		Opcode(&divideF64, Registers.a(13), Registers.t(2), Registers.t(2)),  // nan
 		Opcode(&divideF64, Registers.a(14), Registers.t(0), Registers.t(2)),  // +inf
 		Opcode(&setIfNanF64, Registers.a(15), Registers.a(13)),
-		Opcode(&setIfInfinityF64, Registers.a(16), Registers.a(14)),
+		Opcode(&setIfInfiniteF64, Registers.a(16), Registers.a(14)),
 		Opcode(&setIfNanF64, Registers.a(17), Registers.t(0)),
-		Opcode(&setIfInfinityF64, Registers.a(18), Registers.t(0)),
+		Opcode(&setIfInfiniteF64, Registers.a(18), Registers.t(0)),
 		Opcode(&subtractF64, Registers.a(19), Registers.t(2), Registers.t(0)), // -7.5
 		Opcode(&setIfNegativeF64, Registers.a(20), Registers.a(19)),
 		Opcode(&setIfPositiveF64, Registers.a(21), Registers.t(0)),

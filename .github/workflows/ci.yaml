@@ -88,6 +88,11 @@ jobs:
           done
         shell: bash
 
+      # The coverage build is plain D, not -betterC, so it catches code only one of the two accepts.
+      - name: Measure coverage
+        if: runner.os == 'Linux'
+        run: python3 tools/coverage.py
+
   wasi:
     name: wasm32-wasi (${{ matrix.name }})
     runs-on: ubuntu-latest

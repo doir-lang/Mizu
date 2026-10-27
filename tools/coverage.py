@@ -64,7 +64,8 @@ def build_and_run():
 		# -cov needs druntime, so these are the same tests built as plain D rather than -betterC.
 		# -cov=ctfe, since mizu.lookup builds its instruction table entirely during compilation.
 		# Optimized, since dispatch relies on tail calls and an unoptimized build overflows the stack.
-		command = [compiler, '-cov=ctfe', '-O' if dmd else '-O2', '-g', '-unittest', '-debug' if dmd else '-d-debug',
+		# -checkaction=C as in dub.json: the abort tests expect a failed assert to abort, not throw an AssertError.
+		command = [compiler, '-cov=ctfe', '-O' if dmd else '-O2', '-g', '-unittest', '-checkaction=C', '-debug' if dmd else '-d-debug',
 			version_flag + 'MizuCoverage', *extra, *('-I' + p for p in import_paths), *sources, *link_flags(), '-of=' + exe]
 		if subprocess.run(command, cwd=root).returncode != 0:
 			sys.exit(1)

@@ -70,16 +70,16 @@ bool floatIsNan(double value) @trusted {
 *
 * Examples:
 * ---
-* assert(floatIsInfinity(-float.infinity));
-* assert(!floatIsInfinity(double.nan));
+* assert(floatIsInfinite(-float.infinity));
+* assert(!floatIsInfinite(double.nan));
 * ---
 */
-bool floatIsInfinity(float value) @trusted {
+bool floatIsInfinite(float value) @trusted {
 	return (*cast(const uint*)&value & 0x7FFF_FFFF) == 0x7F80_0000;
 }
 
 /// Ditto
-bool floatIsInfinity(double value) @trusted {
+bool floatIsInfinite(double value) @trusted {
 	return (*cast(const ulong*)&value & 0x7FFF_FFFF_FFFF_FFFF) == 0x7FF0_0000_0000_0000;
 }
 
@@ -361,7 +361,7 @@ void* minF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&sqrtF32, Registers.t(1), Registers.t(0)),
+* 	Opcode(&squareRootF32, Registers.t(1), Registers.t(0)),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -371,7 +371,7 @@ void* minF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * assert(floatRegister!float(env.memory.ptr, Registers.t(1)) == 42);
 * ---
 */
-void* sqrtF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+void* squareRootF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = sqrtf(floatRegister!float(registers, pc.a));
 	mixin(mizuNext);
 }
@@ -544,7 +544,7 @@ void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&setIfInfinityF32, Registers.t(1), Registers.t(0)),
+* 	Opcode(&setIfInfiniteF32, Registers.t(1), Registers.t(0)),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -554,8 +554,8 @@ void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * assert(env.memory[Registers.t(1)] == 1);
 * ---
 */
-void* setIfInfinityF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = floatIsInfinity(floatRegister!float(registers, pc.a));
+void* setIfInfiniteF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	registers[pc.out_] = floatIsInfinite(floatRegister!float(registers, pc.a));
 	mixin(mizuNext);
 }
 

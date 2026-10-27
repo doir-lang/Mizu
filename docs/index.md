@@ -157,7 +157,7 @@ Instruction parameters are described in terms of the opcode fields:
 | [unsafe](../source/mizu/instructions/unsafe.d) | host heap allocation, raw pointers into the VM, `memcpy`/`memset` |
 | [parallel](../source/mizu/instructions/parallel.d) | threads, channels and read/write mutexes |
 | [atomic](../source/mizu/instructions/atomic.d) | sequentially consistent loads, stores, exchanges and read-modify-writes on registers, or through pointers for sharing between threads |
-| [checked](../source/mizu/instructions/checked.d) | whether `core`'s add, subtract, multiply, shift left and narrowing conversions would overflow |
+| [overflow](../source/mizu/instructions/overflow.d) | whether `core`'s add, subtract, multiply, shift left and narrowing conversions would overflow |
 
 `import mizu;` brings in all of them.
 

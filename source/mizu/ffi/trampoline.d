@@ -81,7 +81,8 @@ private void trampoline(R, A...)(const(void)* func, const(ulong)* arguments, ulo
 }
 
 // The table's initializer as D source: within a block, the return class is the most significant digit and the last argument the least.
-private string tableSource() {
+// An enum's literal, not a function: plain D rejects `~` in a `@nogc` function, and -betterC rejects it outside one.
+private enum string tableSource = () {
 	string source = "[";
 	foreach (arguments; 0 .. mizu.config.maximumTrampolineArguments + 1) {
 		size_t combinations = 1;
@@ -97,9 +98,9 @@ private string tableSource() {
 		}
 	}
 	return source ~ "]";
-}
+}();
 
-private immutable Trampoline[blockStart(mizu.config.maximumTrampolineArguments + 1)] trampolines = mixin(tableSource());
+private immutable Trampoline[blockStart(mizu.config.maximumTrampolineArguments + 1)] trampolines = mixin(tableSource);
 
 /**
 * Finds the trampoline for a function returning `kinds[0]` and taking the rest, which must not be empty.
