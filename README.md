@@ -242,7 +242,7 @@ thread-locals on wasm as ordinary globals, which every thread would share. The s
 this and refuses a threaded build with such a compiler; set `DC` to an LDC master build (CI uses
 `ldc-master`), or pass `--single-threaded`.
 
-The tests run through [@tybys/wasm-util](https://github.com/toyobayashi/wasm-util)'s WASI and
+The tests run through [@bjorn3/browser_wasi_shim](https://github.com/bjorn3/browser_wasi_shim)'s WASI and
 [@emnapi/wasi-threads](https://github.com/toyobayashi/emnapi/tree/main/packages/wasi-threads),
 which starts each thread on a Web Worker (or a Node worker thread); the script installs both into
 `bin/wasi`, where the page and [tests/wasi/node.mjs](tests/wasi/node.mjs) import them alike. A

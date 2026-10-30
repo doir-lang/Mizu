@@ -9,7 +9,7 @@
 	"dependencies": {
 		"bc-threads": {
 			"repository": "git+https://github.com/doir-lang/bc-threads.git",
-			"version": "22240436273a37dfd14f1cc0a92ddf88de724e63"
+			"version": "3b33cde42ec0e28dfafcfa288156f023dcbca700"
 		}
 	},
 

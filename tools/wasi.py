@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Builds the unittests for wasm32-wasi with threads and runs them in a browser, or headlessly under Node, through @tybys/wasm-util's WASI and @emnapi/wasi-threads.
+"""Builds the unittests for wasm32-wasi with threads and runs them in a browser, or headlessly under Node, through @bjorn3/browser_wasi_shim's WASI and @emnapi/wasi-threads.
 
 Threads need atomics and a shared memory, so the build targets wasip1-threads unless --single-threaded asks for plain wasip1, which tests the coroutine scheduler instead. It asks `dub describe` for the sources and import paths, compiling bc-threads and libfp in alongside. Mizu dispatches by tail call, so the build is optimized and targets wasm's tail-call feature, which every current browser and Node support. The build links against a wasi-sdk sysroot and compiler-rt builtins, downloaded once into bin/wasi-sdk unless WASI_SYSROOT and WASI_BUILTINS name local copies. It links with `wasm-ld` from PATH (or WASM_LD), falling back to LDC's internal linker.
 
@@ -20,7 +20,7 @@ wasm = os.path.join(out, 'mizu-tests.wasm')
 
 sdkVersion = '34'
 release = f'https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-{sdkVersion}/'
-packages = ['@tybys/wasm-util@0.10.4', '@emnapi/wasi-threads@2.2.0']
+packages = ['@bjorn3/browser_wasi_shim@0.4.2', '@emnapi/wasi-threads@2.2.0']
 # Keep in step with `initialPages` and `maximumPages` in tests/wasi/main.mjs.
 initialMemory = 256 * 65536
 maxMemory = 16384 * 65536
