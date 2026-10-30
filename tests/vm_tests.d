@@ -1353,6 +1353,38 @@ unittest {
 	assert(aborts({ run(program[], env); }));
 }
 
+static if (catchesAborts && hasFFIBackend)
+unittest {
+	// A type stack that cannot grow is fatal.
+	import mizu.ffi;
+	static import fp.testing;
+
+	static immutable Opcode[2] push = [Opcode(&pushTypeU64), Opcode(&halt)];
+	static immutable Opcode[2] clear = [Opcode(&clearTypeStack), Opcode(&halt)];
+	RegistersAndStack env;
+	auto previous = fp.testing.beginRationedAllocator(0);
+	immutable aborted = aborts({ foreach (i; 0 .. 1 << 20) run(push[], env); });
+	fp.testing.endRationedAllocator(previous);
+	assert(aborted);
+	run(clear[], env);
+}
+
+static if (catchesAborts && noHardwareThreads)
+unittest {
+	// So is an execution context that cannot be stored.
+	static import fp.testing;
+
+	Opcode instruction;
+	RegistersAndStack env;
+	setupEnvironment(env, &instruction, &instruction + 1);
+	Coroutine.clear();
+	auto previous = fp.testing.beginRationedAllocator(0);
+	immutable aborted = aborts({ Coroutine.start(&instruction, &env); });
+	fp.testing.endRationedAllocator(previous);
+	assert(aborted);
+	Coroutine.clear();
+}
+
 static if (noHardwareThreads)
 unittest {
 	// Coroutine back-pressure: the worker idles, so main deterministically fills the channel, then `channelSend` and `joinThread` rewind and yield.

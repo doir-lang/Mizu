@@ -289,6 +289,13 @@ unittest {
 
 	assert(library is null);
 	assert(lastError !is null);
+
+	// So can refusing to append the platform's extension to it.
+	static import fp.testing;
+	auto rationed = fp.testing.beginRationedAllocator(1);
+	auto decorated = loadShared("mizu_definitely_not_a_library", true);
+	fp.testing.endRationedAllocator(rationed);
+	assert(decorated is null && lastError !is null);
 }
 
 version(Windows)

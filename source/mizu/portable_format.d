@@ -255,6 +255,18 @@ unittest {
 	assert(restored.program[0].op is &mizu.instructions.core.loadImmediate);
 	assert(mizu.opcode.immediate(restored.program[0]) == 40);
 	assert(restored.program[2].op is &mizu.instructions.core.halt);
+
+	// A refused allocation appending the data returns null rather than a program without it.
+	static import fp.testing;
+	static immutable ubyte[4] data = [1, 2, 3, 4];
+	for (size_t budget = 0;; ++budget) {
+		auto previous = fp.testing.beginRationedAllocator(budget);
+		auto withData = toPortable(program[], data[]);
+		fp.testing.endRationedAllocator(previous);
+		if (withData is null) continue;
+		fp.dynarray.free(withData);
+		break;
+	}
 }
 
 unittest {
