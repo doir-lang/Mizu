@@ -9,7 +9,6 @@
 */
 module mizu.instructions.parallel;
 
-import core.stdc.string : memcpy;
 
 static import fp.dynarray;
 static import fp.pointer;
@@ -19,11 +18,9 @@ static import mizu.error;
 static import mizu.ffi.instructions;
 import mizu.opcode;
 
-static if (!mizu.config.noHardwareThreads) {
-	static import bc.channel;
-	static import bc.mutex;
-	static import bc.thread;
-}
+static import bc.channel;
+static import bc.thread;
+static if (!mizu.config.noHardwareThreads) static import bc.mutex;
 
 @nogc nothrow:
 
@@ -61,9 +58,11 @@ static if (!mizu.config.noHardwareThreads) {
 		return result;
 	}
 } else {
-	// The coroutine fallback's channel is a plain dynarray of blobs, resolved and refused as the threaded one is.
-	private ulong* channelOf(ulong value) @trusted {
-		auto channel = cast(ulong*) value;
+	private alias Channel = bc.channel.LocalChannel!ulong;
+
+	// The coroutine fallback's channel lives on one thread, resolved and refused as the threaded one is.
+	private Channel* channelOf(ulong value) @trusted {
+		auto channel = cast(Channel*) value;
 		if (channel is null) mizu.error.fatal("Channel does not exist.");
 		return channel;
 	}
@@ -73,24 +72,24 @@ static if (!mizu.config.noHardwareThreads) {
 private ulong newThread(Opcode* pc, RegistersAndStack* env, ubyte* sp) @trusted {
 	static if (!mizu.config.noHardwareThreads) {
 		// The thread outlives this frame, so its copy of our environment lives on the heap.
-		auto start = fp.pointer.malloc!ThreadStart(1);
+		auto start = fp.pointer.allocate!ThreadStart(1);
 		if (start is null) mizu.error.fatal("Failed to allocate a thread environment.");
 		start.pc = pc;
-		memcpy(start.env.memory.ptr, env.memory.ptr, memorySizeBytes);
+		fp.pointer.copy(start.env.memory[0 .. memorySize], env.memory[0 .. memorySize]);
 		start.env.programStart = env.programStart;
 		start.env.programEnd = env.programEnd;
 
-		auto thread = fp.pointer.malloc!(bc.thread.Thread)(1);
+		auto thread = fp.pointer.allocate!(bc.thread.Thread)(1);
 		if (thread is null) mizu.error.fatal("Failed to allocate a thread handle.");
 		auto created = bc.thread.create(&threadTrampoline, start);
 		if (created.isNull) mizu.error.fatal("Failed to start a thread.");
 		*thread = created.get;
 		return cast(ulong) thread;
 	} else {
-		auto newEnv = fp.pointer.malloc!RegistersAndStack(1);
+		auto newEnv = fp.pointer.allocate!RegistersAndStack(1);
 		if (newEnv is null) mizu.error.fatal("Failed to allocate a thread environment.");
 		*newEnv = RegistersAndStack.init;
-		memcpy(newEnv.memory.ptr, env.memory.ptr, memorySizeBytes);
+		fp.pointer.copy(newEnv.memory[0 .. memorySize], env.memory[0 .. memorySize]);
 		setupEnvironment(*newEnv, env.programStart, env.programEnd);
 		Coroutine.start(pc, newEnv);
 		return fp.pointer.length(Coroutine.contexts) - 1;
@@ -100,28 +99,9 @@ private ulong newThread(Opcode* pc, RegistersAndStack* env, ubyte* sp) @trusted 
 // Sleeps `microseconds`, true once served; the coroutine fallback instead records a deadline in `storageRegister` and rewinds `pc` until it passes.
 pragma(inline, false) // Inlined clock reads would leave escaped locals that forbid the instruction's tail call.
 private bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister) @trusted {
-	static if (!mizu.config.noHardwareThreads) {
-		version(Posix) {
-			import core.stdc.errno : errno, EINTR;
-			import core.sys.posix.time : nanosleep, timespec;
-
-			timespec request = {
-				tv_sec: cast(typeof(timespec.tv_sec))(microseconds / 1_000_000),
-				tv_nsec: cast(typeof(timespec.tv_nsec))((microseconds % 1_000_000) * 1_000)
-			};
-			// Only `EINTR` fills `remaining`, so sleep again for it then, and give up on any other failure.
-			timespec remaining;
-			while (nanosleep(&request, &remaining) != 0) {
-				if (errno != EINTR) return false;
-				request = remaining;
-			}
-		} else version(Windows) {
-			import core.sys.windows.windows : Sleep;
-			Sleep(cast(uint)((microseconds + 999) / 1000));
-		}
-		return true;
-	} else {
-		immutable now = monotonicMicroseconds();
+	static if (!mizu.config.noHardwareThreads) return bc.thread.sleep(microseconds);
+	else {
+		immutable now = bc.thread.monotonicMicroseconds();
 		if (storageRegister == 0) {
 			storageRegister = now == 0 ? 1 : now; // Zero means "not started yet".
 			--pc;
@@ -133,41 +113,6 @@ private bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister
 		}
 		storageRegister = 0;
 		return true;
-	}
-}
-
-// druntime binds neither `clock_gettime` nor `CLOCK_MONOTONIC` on macOS, though libSystem exports it; bound at module scope so `extern(C)` reaches the mangling.
-version(OSX) {
-	import core.sys.posix.time : timespec;
-	private extern(C) int clock_gettime(int, timespec*);
-	private alias darwinClockGettime = clock_gettime;
-	private enum int darwinClockMonotonic = 6;
-}
-
-// Microseconds from an arbitrary monotonic origin.
-private ulong monotonicMicroseconds() @trusted {
-	version(Posix) {
-		version(OSX) {
-			import core.sys.posix.time : timespec;
-			alias CLOCK_MONOTONIC = darwinClockMonotonic;
-			alias clock_gettime = darwinClockGettime;
-		} else
-			import core.sys.posix.time : clock_gettime, timespec, CLOCK_MONOTONIC;
-
-		timespec now;
-		// A monotonic clock cannot fail on a supported platform.
-		cast(void) clock_gettime(CLOCK_MONOTONIC, &now);
-		return cast(ulong) now.tv_sec * 1_000_000 + cast(ulong) now.tv_nsec / 1_000;
-	} else version(Windows) {
-		import core.sys.windows.windows : QueryPerformanceCounter, QueryPerformanceFrequency, LARGE_INTEGER;
-		LARGE_INTEGER counter, frequency;
-		// Neither fails on Windows XP or later.
-		cast(void) QueryPerformanceCounter(&counter);
-		cast(void) QueryPerformanceFrequency(&frequency);
-		return cast(ulong)(counter.QuadPart * 1_000_000 / frequency.QuadPart);
-	} else {
-		import core.stdc.time : clock, CLOCKS_PER_SEC;
-		return cast(ulong) clock() * 1_000_000 / CLOCKS_PER_SEC;
 	}
 }
 
@@ -207,7 +152,7 @@ extern(C):
 void* forkRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto threadPC = pc + *cast(long*)&registers[pc.a];
 	registers[pc.out_] = newThread(threadPC, env, sp);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -234,7 +179,7 @@ void* forkRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 void* forkRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto threadPC = pc + immediateSigned(*pc);
 	registers[pc.out_] = newThread(threadPC, env, sp);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -247,11 +192,11 @@ void* forkRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env
 * Examples:
 * ---
 * static immutable Opcode[6] program = [
-* 	Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("work")),
+* 	Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("work")),
 * 	Opcode(&forkTo, Registers.t(1), Registers.t(0)),
 * 	Opcode(&joinThread, 0, Registers.t(1)),
 * 	Opcode(&halt),
-* 	Opcode(&label).setImmediate(label2immediate("work")),
+* 	Opcode(&label).setImmediate(labelToImmediate("work")),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -263,7 +208,7 @@ void* forkRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env
 void* forkTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto threadPC = cast(Opcode*) registers[pc.a];
 	registers[pc.out_] = newThread(threadPC, env, sp);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -305,7 +250,7 @@ void* joinThread(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 			else registers[pc.a] = registers[pc.b];
 		}
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -331,7 +276,7 @@ void* joinThread(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 void* sleepMicroseconds(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	// A sleep the platform refused only ends early, which a program cannot tell from being descheduled late.
 	cast(void) delay(registers[pc.a], pc, registers[pc.out_]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -361,15 +306,11 @@ void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 	immutable requested = registers[pc.a] < 1 ? 1 : registers[pc.a];
 	if (requested > size_t.max) mizu.error.fatal("Failed to allocate a channel.");
 	immutable capacity = cast(size_t) requested;
-	static if (!mizu.config.noHardwareThreads) {
-		auto channel = bc.channel.create!ulong(capacity);
-		if (channel is null) mizu.error.fatal("Failed to allocate a channel.");
-	} else {
-		ulong* channel = null;
-		if (fp.dynarray.reserve(channel, capacity) is null) mizu.error.fatal("Failed to allocate a channel.");
-	}
+	static if (!mizu.config.noHardwareThreads) auto channel = bc.channel.create!ulong(capacity);
+	else auto channel = bc.channel.createLocal!ulong(capacity);
+	if (channel is null) mizu.error.fatal("Failed to allocate a channel.");
 	registers[pc.out_] = cast(size_t) channel;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -393,14 +334,11 @@ void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* channelClose(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	static if (!mizu.config.noHardwareThreads) {
-		auto channel = channelOf(registers[pc.a]);
-		bc.channel.close(channel);
-		bc.channel.free(channel);
-	} else
-		fp.dynarray.free(cast(ulong*) registers[pc.a]);
+	auto channel = channelOf(registers[pc.a]);
+	bc.channel.close(channel);
+	bc.channel.free(channel);
 	registers[pc.a] = registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -431,16 +369,11 @@ void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 		auto received = bc.channel.receive(channelOf(registers[pc.a]));
 		registers[pc.out_] = received.isNull ? 0 : received.get;
 	} else {
-		auto channel = channelOf(registers[pc.a]);
-		if (fp.dynarray.length(channel) == 0)
-			--pc;
-		else {
-			registers[pc.out_] = channel[0];
-			cast(void) fp.dynarray.removeAt(channel, 0);
-			registers[pc.a] = cast(size_t) channel; // removeAt may reallocate.
-		}
+		auto received = bc.channel.receive(channelOf(registers[pc.a]));
+		if (received.isNull) --pc;
+		else registers[pc.out_] = received.get;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -471,15 +404,11 @@ void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 		cast(void) bc.channel.send(channelOf(registers[pc.a]), registers[pc.b]);
 	else {
 		auto channel = channelOf(registers[pc.a]);
-		if (fp.dynarray.length(channel) == fp.dynarray.capacity(channel))
-			--pc;
-		else {
-			// Reserved to capacity at creation, so the push cannot reallocate or fail.
-			cast(void) fp.dynarray.pushBack(channel, registers[pc.b]);
-			registers[pc.a] = cast(size_t) channel;
-		}
+		// A full channel makes the sender wait its turn, as the threaded one blocks it; space was reserved at creation, so the send cannot fail.
+		if (bc.channel.length(channel) >= bc.channel.capacity(channel)) --pc;
+		else cast(void) bc.channel.send(channel, registers[pc.b]);
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -513,7 +442,7 @@ void* mutexCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 		registers[pc.out_] = cast(size_t) mutex;
 	} else
 		registers[pc.out_] = 0;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -540,7 +469,7 @@ void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.free(mutexOf(registers[pc.a]));
 	registers[pc.a] = registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -567,13 +496,13 @@ void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 */
 void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		bc.mutex.writeLock(mutexOf(registers[pc.a]));
+		bc.mutex.lockForWriting(mutexOf(registers[pc.a]));
 	else {
 		if (registers[pc.a] != 0)
 			--pc;
 		else registers[pc.a] = ulong.max;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -602,14 +531,14 @@ void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		registers[pc.out_] = bc.mutex.tryWriteLock(mutexOf(registers[pc.a]));
+		registers[pc.out_] = bc.mutex.tryLockForWriting(mutexOf(registers[pc.a]));
 	else {
 		if (registers[pc.a] == 0) {
 			registers[pc.a] = ulong.max;
 			registers[pc.out_] = 1;
 		} else registers[pc.out_] = 0;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -637,12 +566,12 @@ void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 */
 void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		bc.mutex.writeUnlock(mutexOf(registers[pc.a]));
+		bc.mutex.unlockForWriting(mutexOf(registers[pc.a]));
 	else {
 		if (registers[pc.a] == ulong.max)
 			registers[pc.a] = 0;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -671,13 +600,13 @@ void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		bc.mutex.readLock(mutexOf(registers[pc.a]));
+		bc.mutex.lockForReading(mutexOf(registers[pc.a]));
 	else {
 		if (*cast(long*)&registers[pc.a] < 0)
 			--pc;
 		else ++registers[pc.a];
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -704,14 +633,14 @@ void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		registers[pc.out_] = bc.mutex.tryReadLock(mutexOf(registers[pc.a]));
+		registers[pc.out_] = bc.mutex.tryLockForReading(mutexOf(registers[pc.a]));
 	else {
 		if (*cast(long*)&registers[pc.a] >= 0) {
 			++registers[pc.a];
 			registers[pc.out_] = 1;
 		} else registers[pc.out_] = 0;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -739,61 +668,11 @@ void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* mutexReadUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (!mizu.config.noHardwareThreads)
-		bc.mutex.readUnlock(mutexOf(registers[pc.a]));
+		bc.mutex.unlockForReading(mutexOf(registers[pc.a]));
 	else {
 		if (*cast(long*)&registers[pc.a] > 0)
 			--registers[pc.a];
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
-unittest {
-	// `monotonicMicroseconds` only backs the coroutine scheduler's `delay`, so in a hardware-thread build nothing else reaches it.
-	immutable first = monotonicMicroseconds();
-	immutable second = monotonicMicroseconds();
-	assert(second >= first);
-}
-
-// Only the hardware-thread `delay` really sleeps; the coroutine one rewinds until its deadline passes, never touching `nanosleep`. WASI has no signals to interrupt it.
-version(WASI) {} else
-static if (!mizu.config.noHardwareThreads)
-version(Posix)
-unittest {
-	// A repeating 2ms timer interrupts a 30ms delay about fifteen times, and `delay` must sleep the remainder each time.
-	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGALRM;
-	import core.sys.posix.sys.time : itimerval, setitimer;
-
-	// druntime does not define `ITIMER_REAL` on macOS; `<sys/time.h>` has it as 0, like every other platform.
-	version(OSX) enum ITIMER_REAL = 0;
-	else import core.sys.posix.sys.time : ITIMER_REAL;
-
-	static extern(C) void onAlarm(int) @nogc nothrow {}
-
-	// The handler only has to exist for the signal not to kill the process.
-	sigaction_t action, previous;
-	assert(sigemptyset(&action.sa_mask) == 0);
-	action.sa_handler = &onAlarm;
-	assert(sigaction(SIGALRM, &action, &previous) == 0);
-
-	itimerval timer;
-	timer.it_value.tv_usec = 2_000;
-	timer.it_interval.tv_usec = 2_000;
-	assert(setitimer(ITIMER_REAL, &timer, null) == 0);
-
-	immutable start = monotonicMicroseconds();
-	Opcode instruction;
-	auto pc = &instruction;
-	ulong storage = 0;
-	immutable finished = delay(30_000, pc, storage);
-	immutable elapsed = monotonicMicroseconds() - start;
-
-	// Stop the timer and put the old handler back before asserting anything.
-	itimerval off;
-	immutable stopped = setitimer(ITIMER_REAL, &off, null) == 0;
-	immutable restored = sigaction(SIGALRM, &previous, null) == 0;
-	assert(stopped && restored);
-
-	assert(finished);
-	// A loaded machine can only oversleep, never undersleep, so the bound is loose.
-	assert(elapsed >= 25_000);
-}

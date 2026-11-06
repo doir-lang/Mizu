@@ -41,7 +41,7 @@ void* addWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 	bool overflow = false;
 	cast(void) core.checkedint.addu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -72,7 +72,7 @@ void* addWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* en
 	bool overflow = false;
 	cast(void) core.checkedint.adds(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -103,7 +103,7 @@ void* subtractWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env
 	bool overflow = false;
 	cast(void) core.checkedint.subu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -134,7 +134,7 @@ void* subtractWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStac
 	bool overflow = false;
 	cast(void) core.checkedint.subs(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -165,7 +165,7 @@ void* multiplyWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env
 	bool overflow = false;
 	cast(void) core.checkedint.mulu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -196,7 +196,7 @@ void* multiplyWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStac
 	bool overflow = false;
 	cast(void) core.checkedint.muls(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -230,7 +230,7 @@ void* shiftLeftWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* en
 	immutable value = registers[pc.a], amount = registers[pc.b];
 	// D leaves a shift by the full width or more undefined, so it never reaches `<<`.
 	registers[pc.out_] = amount >= 64 ? value != 0 : (value << amount) >> amount != value;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -264,7 +264,7 @@ void* shiftLeftWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndSta
 	immutable value = cast(long) registers[pc.a], amount = registers[pc.b];
 	// Shifting back arithmetically restores `value` exactly when no bit, sign included, was lost.
 	registers[pc.out_] = amount >= 64 ? value != 0 : (value << amount) >> amount != value;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -291,7 +291,7 @@ void* shiftLeftWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndSta
 */
 void* convertToU32WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] > uint.max;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -318,7 +318,7 @@ void* convertToU32WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack*
 */
 void* convertToU16WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] > ushort.max;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -345,5 +345,5 @@ void* convertToU16WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack*
 */
 void* convertToU8WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] > ubyte.max;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

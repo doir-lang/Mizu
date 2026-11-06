@@ -40,5 +40,5 @@ import mizu.opcode;
 void* breakpoint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	version(D_InlineAsm_X86_64) asm @nogc nothrow { int 3; }
 	else version(D_InlineAsm_X86) asm @nogc nothrow { int 3; }
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

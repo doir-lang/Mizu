@@ -1,9 +1,8 @@
 /**
-* The core Mizu types: the register file, the `Opcode` an instruction acts on, the environment holding a program's registers and stack, and the dispatch mixin (`mizuNext`) every instruction ends with.
+* The core Mizu types: the register file, the `Opcode` an instruction acts on, the environment holding a program's registers and stack, and the dispatch mixin (`nextInstruction`) every instruction ends with.
 */
 module mizu.opcode;
 
-import core.stdc.string : memcpy;
 
 static import fp.dynarray;
 static import fp.pointer;
@@ -22,7 +21,7 @@ version(DigitalMars) {
 @nogc nothrow:
 
 /// Type used to name a register inside an `Opcode`.
-alias Reg = ushort;
+alias Register = ushort;
 
 /// How many registers an environment has; the stack begins where they end.
 enum size_t registerCount = 256;
@@ -50,6 +49,7 @@ struct Registers {
 	@disable this();
 static @nogc nothrow:
 
+	// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 	/**
 	* Generic register lookup; `i` is the register's index, below `registerCount`.
 	*
@@ -58,7 +58,7 @@ static @nogc nothrow:
 	* static assert(Registers.x(7) == 7);
 	* ---
 	*/
-	Reg x(size_t i) in(i < registerCount) { return cast(Reg) i; }
+	Register x(size_t i) in(i < registerCount) { return cast(Register) i; }
 
 	/**
 	* Temporary register lookup; `i` is the temporary's index, below `temporaryCount`.
@@ -69,7 +69,7 @@ static @nogc nothrow:
 	* static assert(Registers.t(19) == 20);
 	* ---
 	*/
-	Reg t(size_t i) in(i < temporaryCount) { return cast(Reg)(i + 1); }
+	Register t(size_t i) in(i < temporaryCount) { return cast(Register)(i + 1); }
 
 	/**
 	* Argument register lookup; `i` is the argument's index, below `argumentCount`.
@@ -79,12 +79,12 @@ static @nogc nothrow:
 	* static assert(Registers.a(0) == 22);
 	* ---
 	*/
-	Reg a(size_t i) in(i < argumentCount) { return cast(Reg)(returnAddress + 1 + i); }
+	Register a(size_t i) in(i < argumentCount) { return cast(Register)(returnAddress + 1 + i); }
 
 	/// The always-zero register.
-	enum Reg zero = 0;
+	enum Register zero = 0;
 	/// The return address register.
-	enum Reg returnAddress = temporaryCount + 1;
+	enum Register returnAddress = temporaryCount + 1;
 	/// Ditto
 	alias ra = returnAddress;
 }
@@ -114,11 +114,11 @@ struct Opcode {
 	/// Instruction to perform.
 	Instruction op;
 	/// Register to store the instruction's result in.
-	Reg out_;
+	Register out_;
 	/// Register storing the first argument.
-	Reg a;
+	Register a;
 	/// Register storing the second argument.
-	Reg b;
+	Register b;
 }
 
 /**
@@ -141,11 +141,12 @@ uint immediate(const Opcode code) { return code.a | (cast(uint) code.b << 16); }
 * ---
 */
 Opcode setImmediate(Opcode code, uint value) {
-	code.a = cast(Reg)(value & 0xFFFF);
-	code.b = cast(Reg)(value >> 16);
+	code.a = cast(Register)(value & 0xFFFF);
+	code.b = cast(Register)(value >> 16);
 	return code;
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * The `i32` immediate held in `code.a` and `code.b`.
 *
@@ -156,6 +157,7 @@ Opcode setImmediate(Opcode code, uint value) {
 */
 int immediateSigned(const Opcode code) { return cast(int) immediate(code); }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * `code` with `a` and `b` replaced by an `i32` immediate value.
 *
@@ -166,6 +168,7 @@ int immediateSigned(const Opcode code) { return cast(int) immediate(code); }
 */
 Opcode setImmediateSigned(Opcode code, int value) { return setImmediate(code, cast(uint) value); }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * The `i16` immediate held in `code.b`, used for branch offsets.
 *
@@ -186,7 +189,7 @@ short branchImmediate(const Opcode code) { return cast(short) code.b; }
 * ---
 */
 Opcode setBranchImmediate(Opcode code, short value) {
-	code.b = cast(Reg) value;
+	code.b = cast(Register) value;
 	return code;
 }
 
@@ -203,6 +206,7 @@ float immediateF32(const Opcode code) {
 	return *cast(const float*) &bits;
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * `code` with `a` and `b` replaced by an `f32` immediate value.
 *
@@ -213,6 +217,7 @@ float immediateF32(const Opcode code) {
 */
 Opcode setImmediateF32(Opcode code, float value) { return setImmediate(code, *cast(uint*) &value); }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * `code` with `a` and `b` replaced by the lower half of an `f64` immediate value; pair it with `setUpperImmediateF64`.
 *
@@ -239,6 +244,7 @@ Opcode setUpperImmediateF64(Opcode code, double value) {
 	return setImmediate(code, cast(uint)((*cast(ulong*) &value) >> 32));
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * `code` with `a` and `b` replaced by the lower half of a host pointer; pair it with `setHostPointerUpperImmediate`.
 *
@@ -395,7 +401,7 @@ void setupEnvironment(ref RegistersAndStack env, const(Opcode)[] program) @trust
 void fillStackBottom(ref RegistersAndStack env, const(void)[] binary) @trusted {
 	assert(binary.length <= memorySizeBytes, "mizu: data does not fit in memory");
 	auto end = cast(ubyte*)(env.memory.ptr + memorySize);
-	memcpy(end - binary.length, binary.ptr, binary.length);
+	fp.pointer.copy((end - binary.length)[0 .. binary.length], cast(const(ubyte)[]) binary);
 }
 
 /**
@@ -409,20 +415,20 @@ void fillStackBottom(ref RegistersAndStack env, const(void)[] binary) @trusted {
 */
 void trace(scope const(char)[] name, const(Opcode)* pc) @trusted {
 	static if (mizu.config.enableTracing) {
-		import core.stdc.stdio : printf;
-		cast(void) printf("%.*s(%u, %u, %u)\n", cast(int) name.length, name.ptr, pc.out_, pc.a, pc.b);
+		static import fp.io;
+		cast(void) fp.io.print(name, '(', pc.out_, ", ", pc.a, ", ", pc.b, ")\n");
 	}
 }
 
 /**
-* Executes the next instruction. Mix this in at the end of every instruction: `mixin(mizuNext);`
+* Executes the next instruction. Mix this in at the end of every instruction: `mixin(nextInstruction);`
 *
 * It is a mixin rather than a function because the dispatch must be a tail call made by the instruction itself; see the tail call notes in the README.
 *
 * Examples:
 * ---
 * static extern(C) void* nop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) @nogc nothrow {
-* 	mixin(mizuNext);
+* 	mixin(nextInstruction);
 * }
 * static immutable Opcode[2] program = [Opcode(&nop), Opcode(&halt)];
 * RegistersAndStack env;
@@ -430,7 +436,7 @@ void trace(scope const(char)[] name, const(Opcode)* pc) @trusted {
 * assert(startFromEnvironment(program[], env) is null);
 * ---
 */
-enum string mizuNext = mizu.config.noHardwareThreads
+enum string nextInstruction = mizu.config.noHardwareThreads
 	? q{
 		{
 			mizu.opcode.trace(__FUNCTION__, pc);
@@ -494,6 +500,7 @@ static if (!mizu.config.noHardwareThreads) {
 
 	static @nogc nothrow:
 
+		// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 		/**
 		* True once `context` has halted.
 		*
@@ -528,6 +535,7 @@ static if (!mizu.config.noHardwareThreads) {
 			return currentContext = (currentContext + 1) % fp.pointer.length(contexts);
 		}
 
+		// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 		/**
 		* The context at `index`, which must be below the number of contexts.
 		*
@@ -549,6 +557,7 @@ static if (!mizu.config.noHardwareThreads) {
 			return contexts[index];
 		}
 
+		// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 		/**
 		* The context currently executing.
 		*
@@ -614,6 +623,7 @@ static if (!mizu.config.noHardwareThreads) {
 			return op(pc, registers, env, sp);
 		}
 
+		// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 		// What `next` dispatches to once no context has work left.
 		private extern(C) void* allHalted(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 			return null;

@@ -7,12 +7,13 @@
 */
 module mizu.instructions.f32;
 
-import core.stdc.math : sqrtf;
+static import core.math;
 
 import mizu.opcode;
 
 @nogc nothrow:
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * Reinterprets register `index` as a floating point value of type `F`; an `f32` occupies the register's low 32 bits.
 *
@@ -23,7 +24,7 @@ import mizu.opcode;
 * assert(env.memory[Registers.t(0)] == 0x3FF8_0000_0000_0000);
 * ---
 */
-ref F floatRegister(F)(ulong* registers, Reg index) @trusted if (is(F == float) || is(F == double)) {
+ref F floatRegister(F)(ulong* registers, Register index) @trusted if (is(F == float) || is(F == double)) {
 	return *cast(F*)&registers[index];
 }
 
@@ -107,7 +108,7 @@ extern(C):
 */
 void* convertToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = cast(float) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -132,7 +133,7 @@ void* convertToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* convertSignedToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = cast(float)*cast(long*)&registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -157,7 +158,7 @@ void* convertSignedToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 */
 void* convertFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = cast(ulong) floatRegister!float(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -182,7 +183,7 @@ void* convertFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* convertSignedFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	*cast(long*)&registers[pc.out_] = cast(long) floatRegister!float(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -209,7 +210,7 @@ void* convertSignedFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* addF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = floatRegister!float(registers, pc.a) + floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -236,7 +237,7 @@ void* addF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* subtractF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = floatRegister!float(registers, pc.a) - floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -263,7 +264,7 @@ void* subtractF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* multiplyF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = floatRegister!float(registers, pc.a) * floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -290,7 +291,7 @@ void* multiplyF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* divideF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	floatRegister!float(registers, pc.out_) = floatRegister!float(registers, pc.a) / floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -319,7 +320,7 @@ void* maxF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable x = floatRegister!float(registers, pc.a);
 	immutable y = floatRegister!float(registers, pc.b);
 	floatRegister!float(registers, pc.out_) = x < y ? y : x;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -348,7 +349,7 @@ void* minF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable x = floatRegister!float(registers, pc.a);
 	immutable y = floatRegister!float(registers, pc.b);
 	floatRegister!float(registers, pc.out_) = y < x ? y : x;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -372,8 +373,8 @@ void* minF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* squareRootF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	floatRegister!float(registers, pc.out_) = sqrtf(floatRegister!float(registers, pc.a));
-	mixin(mizuNext);
+	floatRegister!float(registers, pc.out_) = core.math.sqrt(floatRegister!float(registers, pc.a));
+	mixin(nextInstruction);
 }
 
 /**
@@ -400,7 +401,7 @@ void* squareRootF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* setIfEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatRegister!float(registers, pc.a) == floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -427,7 +428,7 @@ void* setIfEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* setIfNotEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatRegister!float(registers, pc.a) != floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -454,7 +455,7 @@ void* setIfNotEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfLessF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatRegister!float(registers, pc.a) < floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -481,7 +482,7 @@ void* setIfLessF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* setIfGreaterEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatRegister!float(registers, pc.a) >= floatRegister!float(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -506,7 +507,7 @@ void* setIfGreaterEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* setIfNegativeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatSignBit(floatRegister!float(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -531,7 +532,7 @@ void* setIfNegativeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = !floatSignBit(floatRegister!float(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -556,7 +557,7 @@ void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfInfiniteF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatIsInfinite(floatRegister!float(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -581,5 +582,5 @@ void* setIfInfiniteF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfNanF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = floatIsNan(floatRegister!float(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

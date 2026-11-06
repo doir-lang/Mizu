@@ -7,10 +7,10 @@
 */
 module mizu.ffi.instructions;
 
-import core.stdc.string : strlen;
 
 static import fp.dynarray;
 static import fp.pointer;
+static import fp.string;
 
 static import mizu.config;
 static import mizu.error;
@@ -79,7 +79,7 @@ private void* callImpl(bool hasReturn)(Opcode* pc, ulong* registers, RegistersAn
 		else
 			mizu.ffi.libffi.ffi_call(iface.cif.ptr, func, null, arguments.ptr);
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 // Pushes one type onto the current type stack, named as libffi and `mizu.ffi.trampoline.Kind` name it, aborting if it cannot grow.
@@ -119,7 +119,7 @@ extern(C):
 */
 void* pushTypeVoid(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("void", "void_")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -146,7 +146,7 @@ void* pushTypeVoid(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* pushTypePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("pointer", "pointer")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -173,7 +173,7 @@ void* pushTypePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* pushTypeI32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("sint32", "i32")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -200,7 +200,7 @@ void* pushTypeI32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pushTypeU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("uint32", "u32")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -227,7 +227,7 @@ void* pushTypeU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pushTypeI64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("sint64", "i64")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -254,7 +254,7 @@ void* pushTypeI64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pushTypeU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("uint64", "u64")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -281,7 +281,7 @@ void* pushTypeU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pushTypeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("float", "f32")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -308,7 +308,7 @@ void* pushTypeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pushTypeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	pushType!("double", "f64")();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -338,7 +338,7 @@ void* pushTypeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 void* clearTypeStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	static if (mizu.config.ffiTrampolines) fp.dynarray.clear(currentKinds);
 	else static if (!mizu.config.noLibFFI) fp.dynarray.clear(currentTypes);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -384,7 +384,7 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 		if (fp.pointer.length(currentTypes) == 0)
 			mizu.error.fatal("Function interfaces must at least specify the return type!");
 
-		auto iface = fp.pointer.malloc!Interface(1);
+		auto iface = fp.pointer.allocate!Interface(1);
 		if (iface is null) mizu.error.fatal("Failed to allocate an FFI interface.");
 		*iface = Interface.init;
 		iface.types = currentTypes;
@@ -398,7 +398,7 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 		currentTypes = null;
 		registers[pc.out_] = cast(size_t) iface;
 	}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -432,9 +432,10 @@ void* freeInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 		fp.pointer.free(iface);
 	}
 	registers[pc.a] = registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * Calls a foreign function, discarding its result. The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
 *
@@ -466,6 +467,7 @@ void* call(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	return callImpl!false(pc, registers, env, sp);
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * Calls a foreign function and keeps its result. The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
 *
@@ -522,12 +524,12 @@ void* callWithReturn(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* loadLibrary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto path = cast(const(char)*) registers[pc.a];
-	auto pathSlice = path[0 .. strlen(path)];
+	auto pathSlice = fp.string.sliceTerminated(path);
 
 	auto library = mizu.ffi.loader.loadShared(pathSlice, false);
 	if (library is null) library = mizu.ffi.loader.loadShared(pathSlice, true);
 	registers[pc.out_] = cast(size_t) library;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -540,7 +542,7 @@ void* loadLibrary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * Examples:
 * ---
 * static immutable Opcode[2] program = [
-* 	Opcode(&loadFirstLibraryThatExists, Registers.t(0)).setImmediate(3),
+* 	Opcode(&loadFirstFound, Registers.t(0)).setImmediate(3),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -553,20 +555,20 @@ void* loadLibrary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * assert(mizu.ffi.loader.close(cast(mizu.ffi.loader.Library*) env.memory[Registers.t(0)]));
 * ---
 */
-void* loadFirstLibraryThatExists(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+void* loadFirstFound(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable count = immediate(*pc);
 
 	const(char)[][argumentCount] paths;
 	if (count > paths.length) mizu.error.fatal("Too many library paths: ", count);
 	foreach (i; 0 .. count) {
 		auto path = cast(const(char)*) registers[Registers.a(i)];
-		paths[i] = path[0 .. strlen(path)];
+		paths[i] = fp.string.sliceTerminated(path);
 	}
 
-	auto library = mizu.ffi.loader.loadFirstThatExists(paths[0 .. count], false);
-	if (library is null) library = mizu.ffi.loader.loadFirstThatExists(paths[0 .. count], true);
+	auto library = mizu.ffi.loader.loadFirstFound(paths[0 .. count], false);
+	if (library is null) library = mizu.ffi.loader.loadFirstFound(paths[0 .. count], true);
 	registers[pc.out_] = cast(size_t) library;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -580,7 +582,7 @@ void* loadFirstLibraryThatExists(Opcode* pc, ulong* registers, RegistersAndStack
 * Examples:
 * ---
 * static immutable const(char)[][3] names = ["libc.so.6", "libSystem.B.dylib", "msvcrt"];
-* mizu.ffi.loader.Library* c = mizu.ffi.loader.loadFirstThatExists(names[]);
+* mizu.ffi.loader.Library* c = mizu.ffi.loader.loadFirstFound(names[]);
 * scope(exit) cast(void) mizu.ffi.loader.close(c);
 * static immutable Opcode[2] program = [
 * 	Opcode(&loadLibraryFunction, Registers.t(2), Registers.t(0), Registers.t(1)),
@@ -598,5 +600,5 @@ void* loadLibraryFunction(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 	auto library = cast(mizu.ffi.loader.Library*) registers[pc.a];
 	auto name = cast(const(char)*) registers[pc.b];
 	registers[pc.out_] = cast(size_t) mizu.ffi.loader.lookup(name, library);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

@@ -86,7 +86,7 @@ extern(C) {
 	* assert(cast(int) result == 42);
 	* ---
 	*/
-	void ffi_call(void* cif, void* fn, void* rvalue, void** avalue);
+	void ffi_call(void* cif, void* entry, void* rvalue, void** avalue);
 
 	/// The type descriptors Mizu's `pushType*` instructions push.
 	extern __gshared ffi_type ffi_type_void;

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Compiles and runs every DDoc `---` example under -betterC, and reports public definitions missing documentation or an example. Set DC to use a compiler other than ldc2."""
+"""Compiles and runs every DDoc `---` example under -betterC, and reports public definitions missing documentation or an example. Set DC to use a compiler other than ldc2.
+
+Usage: tools/doctest.py
+"""
 import glob, os, platform, re, subprocess, sys
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -9,6 +12,7 @@ exe = os.path.join(out, 'doctests' + ('.exe' if os.name == 'nt' else ''))
 
 
 def describe(*args):
+	"""Runs `dub describe` with `args` and returns its non-empty output lines; exits with dub's output if it fails."""
 	result = subprocess.run(['dub', 'describe', *args, '--compiler=' + compiler], cwd=root, capture_output=True, text=True)
 	if result.returncode != 0:
 		sys.exit(result.stdout + result.stderr)
@@ -20,13 +24,14 @@ conditional = re.compile(r'(?!version\s*\(\s*unittest\s*\))(?:(version|static\s+
 
 
 def strip_conditions(s):
+	"""Returns `s` without the `version`, `static if` and `debug` conditions in front of its declaration."""
 	while (m := conditional.match(s)):
 		s = s[m.end():]
 	return s
 
 
-# Yields, for each DDoc comment, the index of the line after it and its (line number, text) pairs.
 def ddoc_blocks(lines):
+	"""Yields, for each DDoc comment, the index of the line after it and its (line number, text) pairs."""
 	i = 0
 	while i < len(lines):
 		s = lines[i].strip()
@@ -57,6 +62,7 @@ def ddoc_blocks(lines):
 
 
 def is_function(decl):
+	"""Whether the declaration `decl` starts a function or function template, which must have an example."""
 	if decl.startswith(('struct', 'enum', 'alias', 'module', 'package struct', 'package enum')):
 		return decl.startswith('struct') and '(' in decl.split('{')[0]
 	if '=' in decl.split('(')[0]:
@@ -66,6 +72,7 @@ def is_function(decl):
 
 
 def check(path, lines, problems, examples):
+	"""Appends to `problems` each definition in `lines` missing documentation, or an example if it is a function, and to `examples` each `---` example as (first line, code lines, whether it documents a `package` definition)."""
 	documented = set()
 	for end, body in ddoc_blocks(lines):
 		j = end
@@ -123,8 +130,8 @@ def check(path, lines, problems, examples):
 				opened.pop()
 
 
-# Mirrors dub.json's `libs-*` and `lflags-*`; the FFI examples' callbacks need the executable's symbols exported.
 def link_flags():
+	"""Mirrors dub.json's `libs-*` and `lflags-*`; the FFI examples' callbacks need the executable's symbols exported."""
 	if os.name == 'nt':
 		# tools/vcpkg-libffi.ps1 stages libffi here; a missing LIBPATH is ignored, so one on LIB still resolves.
 		return ['-L=/LIBPATH:' + os.path.join(root, '.vcpkg', 'lib'), '-L=ffi.lib']
@@ -137,10 +144,12 @@ def link_flags():
 
 
 def modules_in(sources):
+	"""Returns the module name each file in `sources` declares."""
 	return [re.search(r'^module\s+([\w.]+);', open(p, encoding='utf-8').read(), re.M).group(1) for p in sources]
 
 
 def inside_root(path):
+	"""Whether `path` lies inside this package's root; paths on different Windows drives do not."""
 	try:
 		return os.path.commonpath([root, os.path.abspath(path)]) == root
 	except ValueError:
@@ -149,6 +158,7 @@ def inside_root(path):
 
 
 def main():
+	"""Generates a unittest module per documented module, builds them with the sources under -betterC and runs them, then reports the documentation problems; returns the exit status."""
 	os.makedirs(out, exist_ok=True)
 	for old in glob.glob(os.path.join(out, '*.d')):
 		os.remove(old)

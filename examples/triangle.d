@@ -11,7 +11,7 @@
 */
 module examples.triangle;
 
-import core.stdc.stdio : printf;
+static import fp.io;
 
 import mizu;
 import mizu.ffi;
@@ -25,7 +25,7 @@ enum uint GL_COLOR_BUFFER_BIT = 0x0000_4000;
 enum uint GL_TRIANGLES = 0x0004;
 
 /// Registers holding the GLFW entry points, plus libc's `puts` for the error paths; the high registers serve as globals, so the program names each function readably.
-enum : Reg {
+enum : Register {
 	pInit = 100,              /// `int glfwInit(void)`
 	pCreateWindow,            /// `GLFWwindow* glfwCreateWindow(int, int, const char*, void*, void*)`
 	pMakeContextCurrent,      /// `void glfwMakeContextCurrent(GLFWwindow*)`
@@ -40,7 +40,7 @@ enum : Reg {
 }
 
 /// Registers holding the OpenGL entry points, resolved via `glfwGetProcAddress`.
-enum : Reg {
+enum : Register {
 	pClearColor = 120,        /// `void glClearColor(float, float, float, float)`
 	pClear,                   /// `void glClear(uint)`
 	pBegin,                   /// `void glBegin(uint)`
@@ -51,7 +51,7 @@ enum : Reg {
 }
 
 /// Registers holding the interfaces `createInterface` prepares.
-enum : Reg {
+enum : Register {
 	ifVoid = 140,             /// `void()`
 	ifI32,                    /// `i32()`
 	ifVoidPtr,                /// `void(void*)`
@@ -68,7 +68,7 @@ enum : Reg {
 }
 
 /// Registers holding the program's state.
-enum : Reg {
+enum : Register {
 	rLoop = 160,              /// Address of the `draw` label.
 	rDone = 161,              /// Address of the `done` label.
 	rFail = 162,              /// Address of the `fail` label.
@@ -110,13 +110,13 @@ immutable errorInit = "[mizu] glfwInit() failed; is there a display to open?";
 immutable errorWindow = "[mizu] glfwCreateWindow() failed.";
 
 extern(C) int main() {
-	printf("Drawing a triangle from Mizu; the window closes after %u frames.\n", frameCount);
+	cast(void) fp.io.print("Drawing a triangle from Mizu; the window closes after ", frameCount, " frames.\n");
 
 	// Every pointer below is a host address, so unlike `examples/fib.d` this program is assembled at run time.
 	Opcode[218] program = [
-		Opcode(&findLabel, rLoop).setImmediate(label2immediate("draw")),
-		Opcode(&findLabel, rDone).setImmediate(label2immediate("done")),
-		Opcode(&findLabel, rFail).setImmediate(label2immediate("fail")),
+		Opcode(&findLabel, rLoop).setImmediate(labelToImmediate("draw")),
+		Opcode(&findLabel, rDone).setImmediate(labelToImmediate("done")),
+		Opcode(&findLabel, rFail).setImmediate(labelToImmediate("fail")),
 
 		// --- Describe every signature: the first type pushed is the return type, and `createInterface` consumes the stack, so these run back to back.
 
@@ -195,7 +195,7 @@ extern(C) int main() {
 		Opcode(&loadUpperImmediate, Registers.a(2)).setHostPointerUpperImmediate(libraryNames[2].ptr),
 		Opcode(&loadImmediate, Registers.a(3)).setHostPointerLowerImmediate(libraryNames[3].ptr),
 		Opcode(&loadUpperImmediate, Registers.a(3)).setHostPointerUpperImmediate(libraryNames[3].ptr),
-		Opcode(&loadFirstLibraryThatExists, rLibrary).setImmediate(cast(uint) libraryNames.length),
+		Opcode(&loadFirstFound, rLibrary).setImmediate(cast(uint) libraryNames.length),
 
 		// `puts` comes out of the host process itself (library zero), and is how the failure paths below report what went wrong.
 		Opcode(&loadImmediate, Registers.t(0)).setHostPointerLowerImmediate(sPuts.ptr),
@@ -318,7 +318,7 @@ extern(C) int main() {
 		Opcode(&loadImmediate, rOne).setImmediate(1),
 
 		// --- The draw loop ---------------------------------------------------
-		Opcode(&label).setImmediate(label2immediate("draw")),
+		Opcode(&label).setImmediate(labelToImmediate("draw")),
 			// if (glfwWindowShouldClose(window)) goto done
 			Opcode(&add, Registers.a(0), rWindow, 0),
 			Opcode(&callWithReturn, Registers.t(0), pWindowShouldClose, ifI32Ptr),
@@ -387,7 +387,7 @@ extern(C) int main() {
 			Opcode(&jumpTo, 0, rLoop),
 
 		// --- Shut down: `glfwTerminate` destroys the window, leaving only the interfaces Mizu allocated to release.
-		Opcode(&label).setImmediate(label2immediate("done")),
+		Opcode(&label).setImmediate(labelToImmediate("done")),
 		Opcode(&call, 0, pTerminate, ifVoid),
 		Opcode(&freeInterface, 0, ifVoid, 0),
 		Opcode(&freeInterface, 0, ifI32, 0),
@@ -406,7 +406,7 @@ extern(C) int main() {
 		Opcode(&halt),
 
 		// Every failure path arrives here with `a0` already pointing at the message explaining what went wrong.
-		Opcode(&label).setImmediate(label2immediate("fail")),
+		Opcode(&label).setImmediate(labelToImmediate("fail")),
 		Opcode(&call, 0, pPuts, ifI32Ptr),
 		Opcode(&halt),
 	];

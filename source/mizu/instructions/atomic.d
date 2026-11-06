@@ -48,7 +48,7 @@ extern(C):
 */
 void* atomicFence(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	core.atomic.atomicFence();
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -73,7 +73,7 @@ void* atomicFence(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* atomicLoad(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicLoad(*cell(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -101,7 +101,7 @@ void* atomicStore(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 	immutable value = registers[pc.b];
 	core.atomic.atomicStore(*cell(registers, pc.a), value);
 	registers[pc.out_] = value;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -129,7 +129,7 @@ void* atomicStore(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* atomicExchange(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicExchange(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -164,7 +164,7 @@ void* atomicCompareExchange(Opcode* pc, ulong* registers, RegistersAndStack* env
 	ulong expected = registers[pc.out_];
 	cast(void) core.atomic.cas(cell(registers, pc.a), &expected, registers[pc.b]);
 	registers[pc.out_] = expected;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -193,7 +193,7 @@ void* atomicCompareExchange(Opcode* pc, ulong* registers, RegistersAndStack* env
 void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	// `core.atomic.atomicFetchAdd` takes a `size_t`, too narrow on 32 bit targets; wrapping arithmetic recovers the old value from the new.
 	registers[pc.out_] = core.atomic.atomicOp!"+="(*cell(registers, pc.a), registers[pc.b]) - registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -221,7 +221,7 @@ void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* atomicFetchSubtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicOp!"-="(*cell(registers, pc.a), registers[pc.b]) + registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -249,7 +249,7 @@ void* atomicFetchSubtract(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 */
 void* atomicFetchAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x & y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -277,7 +277,7 @@ void* atomicFetchAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* atomicFetchOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x | y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -305,7 +305,7 @@ void* atomicFetchOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* atomicFetchXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x ^ y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -333,7 +333,7 @@ void* atomicFetchXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* atomicFetchMin(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x < y ? x : y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -361,7 +361,7 @@ void* atomicFetchMin(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* atomicFetchMax(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x > y ? x : y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -389,7 +389,7 @@ void* atomicFetchMax(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* atomicFetchMinSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x < cast(long) y ? x : y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -417,7 +417,7 @@ void* atomicFetchMinSigned(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* atomicFetchMaxSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x > cast(long) y ? x : y)(cell(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -443,7 +443,7 @@ void* atomicFetchMaxSigned(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* atomicLoadPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicLoad(*pointee(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -472,7 +472,7 @@ void* atomicStorePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 	immutable value = registers[pc.b];
 	core.atomic.atomicStore(*pointee(registers, pc.a), value);
 	registers[pc.out_] = value;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -501,7 +501,7 @@ void* atomicStorePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 */
 void* atomicExchangePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicExchange(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -537,7 +537,7 @@ void* atomicCompareExchangePointer(Opcode* pc, ulong* registers, RegistersAndSta
 	ulong expected = registers[pc.out_];
 	cast(void) core.atomic.cas(pointee(registers, pc.a), &expected, registers[pc.b]);
 	registers[pc.out_] = expected;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -566,7 +566,7 @@ void* atomicCompareExchangePointer(Opcode* pc, ulong* registers, RegistersAndSta
 */
 void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicOp!"+="(*pointee(registers, pc.a), registers[pc.b]) - registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -595,7 +595,7 @@ void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 */
 void* atomicFetchSubtractPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = core.atomic.atomicOp!"-="(*pointee(registers, pc.a), registers[pc.b]) + registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -624,7 +624,7 @@ void* atomicFetchSubtractPointer(Opcode* pc, ulong* registers, RegistersAndStack
 */
 void* atomicFetchAndPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x & y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -653,7 +653,7 @@ void* atomicFetchAndPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 */
 void* atomicFetchOrPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x | y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -682,7 +682,7 @@ void* atomicFetchOrPointer(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* atomicFetchXorPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x ^ y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -711,7 +711,7 @@ void* atomicFetchXorPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 */
 void* atomicFetchMinPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x < y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -740,7 +740,7 @@ void* atomicFetchMinPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 */
 void* atomicFetchMaxPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => x > y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -769,7 +769,7 @@ void* atomicFetchMaxPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 */
 void* atomicFetchMinSignedPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x < cast(long) y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -798,5 +798,5 @@ void* atomicFetchMinSignedPointer(Opcode* pc, ulong* registers, RegistersAndStac
 */
 void* atomicFetchMaxSignedPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x > cast(long) y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

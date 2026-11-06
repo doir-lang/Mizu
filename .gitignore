@@ -7,3 +7,5 @@ bin
 .vcpkg
 vcpkg_installed
 dub.selections.json
+__pycache__/
+*.pyc

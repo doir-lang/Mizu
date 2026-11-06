@@ -7,12 +7,11 @@
 */
 module mizu.portable_format;
 
-import core.stdc.stdio : snprintf;
-import core.stdc.string : memcpy;
 
 static import fp.dynarray;
 static import fp.pointer;
 static import fp.string;
+static import fp.string.numbers;
 
 static import mizu.lookup;
 static import mizu.opcode;
@@ -63,8 +62,8 @@ ubyte* toPortable(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)
 		return null;
 	}
 	mizu.serialize.SerializationOpcode terminator;
-	memcpy(result + end, &terminator, marker);
-	memcpy(result + end + marker, data.ptr, data.length);
+	fp.pointer.copy(result[end .. end + marker], (cast(const(ubyte)*) &terminator)[0 .. marker]);
+	fp.pointer.copy(result[end + marker .. end + marker + data.length], cast(const(ubyte)[]) data);
 	return result;
 }
 
@@ -160,14 +159,11 @@ PortableProgram fromPortable(alias L = mizu.lookup.defaultLookup)(const(void)[] 
 char* generateSourceFile(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)[] program, ref mizu.opcode.RegistersAndStack env, scope const(char)[] extraImports = null) @trusted {
 	char* out_ = null;
 	bool failed = false;
-	char[64] scratch;
-
 	void put(scope const(char)[] text) {
-		if (!failed && fp.string.concatenate(out_, text) is null) failed = true;
+		if (!failed) failed = !fp.string.concatenate(out_, text);
 	}
-	void putUnsigned(ulong value, scope const(char)* format = "%llu") {
-		immutable n = snprintf(scratch.ptr, scratch.length, format, value);
-		put(scratch[0 .. n]);
+	void putUnsigned(ulong value) {
+		if (!failed) failed = !fp.string.numbers.appendUnsigned(out_, value);
 	}
 
 	// Which instructions the program uses, so the file imports their modules and nothing else.
@@ -184,7 +180,7 @@ char* generateSourceFile(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.
 	foreach (id; 0 .. L.entryCount) {
 		if (!used[id]) continue;
 		auto mod = mizu.lookup.moduleOfName(L.lookupName(id));
-		if (mod.length == 0 || mizu.lookup.sameName(mod, lastModule)) continue;
+		if (mod.length == 0 || fp.string.equal(mod, lastModule)) continue;
 		put("import ");
 		put(mod);
 		put(";\n");
@@ -219,7 +215,7 @@ char* generateSourceFile(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.
 		put("\t\t");
 		for (size_t j = 0; j < 12 && i < mizu.opcode.memorySize; ++j, ++i) {
 			put("0x");
-			putUnsigned(env.memory[i], "%llX");
+			if (!failed) failed = !fp.string.numbers.appendHex(out_, env.memory[i]);
 			put(", ");
 		}
 		put("\n");
@@ -260,9 +256,9 @@ unittest {
 	static import fp.testing;
 	static immutable ubyte[4] data = [1, 2, 3, 4];
 	for (size_t budget = 0;; ++budget) {
-		auto previous = fp.testing.beginRationedAllocator(budget);
+		auto previous = fp.testing.limitAllocations(budget);
 		auto withData = toPortable(program[], data[]);
-		fp.testing.endRationedAllocator(previous);
+		fp.testing.restoreAllocator(previous);
 		if (withData is null) continue;
 		fp.dynarray.free(withData);
 		break;
@@ -324,7 +320,7 @@ unittest {
 	assert(fp.string.contains(source, "import mizu.instructions.core;\n", 0));
 	assert(fp.string.contains(source, "&mizu.instructions.core.loadImmediate", 0));
 	assert(fp.string.contains(source, "&mizu.instructions.core.halt", 0));
-	assert(fp.string.contains(source, "0xABC", 0));
+	assert(fp.string.contains(source, "0xabc", 0));
 	assert(fp.string.contains(source, "extern(C) int main()", 0));
 
 	// Only the modules the program actually draws on are imported.
@@ -350,11 +346,11 @@ unittest {
 	mizu.opcode.setupEnvironment(env, program[]);
 
 	// Whatever the caller adds is written after the derived imports.
-	auto source = generateSourceFile!extended(program[], env, "import core.stdc.stdio;\n");
+	auto source = generateSourceFile!extended(program[], env, "static import fp.io;\n");
 	scope(exit) fp.string.free(source);
 
 	immutable derived = fp.string.find(source, "import mizu.portable_format;\n", 0);
-	immutable extra = fp.string.find(source, "import core.stdc.stdio;\n", 0);
+	immutable extra = fp.string.find(source, "static import fp.io;\n", 0);
 	assert(derived != fp.pointer.notFound);
 	assert(extra != fp.pointer.notFound);
 	assert(derived < extra);

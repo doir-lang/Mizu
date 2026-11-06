@@ -5,14 +5,15 @@
 */
 module examples.threads;
 
-import core.stdc.stdio : printf;
+static import fp.io;
+static import fp.string;
 
 import mizu;
 import mizu.ffi;
 
 /// The host function the Mizu program calls through the FFI.
 export extern(C) void mizuExamplePrint(const(char)* text) @nogc nothrow {
-	printf("[host] %s\n", text);
+	cast(void) fp.io.print("[host] ", fp.string.sliceTerminated(text), '\n');
 }
 
 immutable char[7] greeting = "Hello\0";
@@ -21,7 +22,7 @@ immutable char[19] symbolName = "mizuExamplePrint\0";
 extern(C) int main() {
 	// Host pointers are only known at run time, so this program is built here rather than being a compile-time constant.
 	Opcode[57] program = [
-		Opcode(&findLabel, 200).setImmediate(label2immediate("thrd")),
+		Opcode(&findLabel, 200).setImmediate(labelToImmediate("thrd")),
 
 		// Describe void mizuExamplePrint(void*) and find the function.
 		Opcode(&pushTypeVoid),
@@ -47,8 +48,8 @@ extern(C) int main() {
 		Opcode(&halt),
 
 		// The worker thread.
-		Opcode(&label).setImmediate(label2immediate("thrd")),
-		Opcode(&findLabel, 202).setImmediate(label2immediate("fib")),
+		Opcode(&label).setImmediate(labelToImmediate("thrd")),
+		Opcode(&findLabel, 202).setImmediate(labelToImmediate("fib")),
 		// mizuExamplePrint(greeting)
 		Opcode(&add, Registers.a(0), 204, 0),
 		Opcode(&call, 0, 203, 201),
@@ -59,7 +60,7 @@ extern(C) int main() {
 		Opcode(&halt),
 
 		// Recursive Fibonacci, as in examples/fib.d.
-		Opcode(&label).setImmediate(label2immediate("fib")),
+		Opcode(&label).setImmediate(labelToImmediate("fib")),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(3),
 		Opcode(&setIfGreaterEqual, Registers.t(0), Registers.a(0), Registers.t(0)),
 		Opcode(&branchRelativeImmediate, 0, Registers.t(0)).setBranchImmediate(3),
@@ -92,7 +93,7 @@ extern(C) int main() {
 		Opcode(&jumpTo, 0, Registers.ra),
 	];
 
-	printf("fib(25), computed on a forked Mizu thread:\n");
+	cast(void) fp.io.print("fib(25), computed on a forked Mizu thread:\n");
 
 	RegistersAndStack environment;
 	setupEnvironment(environment, program[]);

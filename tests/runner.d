@@ -5,9 +5,7 @@
 */
 module runner;
 
-import core.stdc.stdio : fprintf, printf, stderr;
-
-private enum modules = [
+private alias modules = imported!"std.meta".AliasSeq!(
 	"mizu.error",
 	"mizu.opcode",
 	"mizu.instructions.core",
@@ -18,24 +16,10 @@ private enum modules = [
 	"mizu.ffi.loader",
 	"mizu.ffi.trampoline",
 	"vm_tests",
-];
+);
 
 private int runEveryTest() {
-	size_t total = 0;
-
-	static foreach (name; modules) {{
-		alias mod = mixin("imported!\"" ~ name ~ "\"");
-		alias tests = __traits(getUnitTests, mod);
-		cast(void) fprintf(stderr, "%s (%d tests)\n", name.ptr, cast(int) tests.length);
-		static foreach (i, test; tests) {
-			cast(void) fprintf(stderr, "  [%d] ", cast(int) i);
-			test();
-			cast(void) fprintf(stderr, "ok\n");
-			++total;
-		}
-	}}
-
-	cast(void) printf("All %d tests passed.\n", cast(int) total);
+	cast(void) imported!"fp.testing".runTests!modules("mizu");
 	return 0;
 }
 
@@ -43,8 +27,8 @@ private int runEveryTest() {
 version(MizuCoverage) {
 	// A tester that runs nothing but still asks for `main`, so druntime does not run every test before `runEveryTest` does.
 	shared static this() {
-		import core.runtime : Runtime, UnitTestResult;
-		Runtime.extendedModuleUnitTester = () => UnitTestResult(0, 0, true, false);
+		static import core.runtime;
+		core.runtime.Runtime.extendedModuleUnitTester = () => core.runtime.UnitTestResult(0, 0, true, false);
 	}
 
 	int main() { return runEveryTest(); }

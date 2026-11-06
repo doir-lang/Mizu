@@ -7,6 +7,8 @@ module vm_tests;
 
 import mizu;
 
+static import fp.testing;
+
 @nogc nothrow:
 
 // Runs `program` to completion in a fresh environment, which it leaves holding the final registers and stack.
@@ -15,99 +17,13 @@ private void run(const(Opcode)[] program, ref RegistersAndStack env) @trusted {
 	assert(startFromEnvironment(program, env) is null);
 }
 
-// `fatal` ends the process, so `aborts` catches its `SIGABRT` and jumps back out of the handler; the branches differ only in spelling.
-version(WASI) {} else version(Posix) {
-	import core.sys.posix.signal : sigaction_t, sigaction, sigemptyset, SIGABRT;
-
-	// druntime passes `sigjmp_buf` by value, so these take a buffer by pointer; see the matching note in `mizu.error`.
-	version(CRuntime_Glibc) version = MizuUnderscoredSigsetjmp;
-	else version(CRuntime_UClibc) version = MizuUnderscoredSigsetjmp;
-
-	version(MizuUnderscoredSigsetjmp) {
-		private extern(C) int __sigsetjmp(void* buffer, int saveMask);
-		private alias sigsetjmpByPointer = __sigsetjmp;
-	} else {
-		private extern(C) int sigsetjmp(void* buffer, int saveMask);
-		private alias sigsetjmpByPointer = sigsetjmp;
-	}
-
-	private extern(C) void siglongjmp(void* buffer, int value);
-
-	// Larger than any C library's `sigjmp_buf`: glibc's on PowerPC, the biggest, is just under 600 bytes.
-	private __gshared align(16) ubyte[1024] abortEscape;
-
-	// What `installAbortHandler` has to give back to `restoreAbortHandler`.
-	private alias SavedAbortHandler = sigaction_t;
-
-	private void installAbortHandler(out SavedAbortHandler saved) {
-		sigaction_t action;
-		assert(sigemptyset(&action.sa_mask) == 0);
-		action.sa_handler = &onAbort;
-		assert(sigaction(SIGABRT, &action, &saved) == 0);
-	}
-
-	private void restoreAbortHandler(ref SavedAbortHandler saved) {
-		assert(sigaction(SIGABRT, &saved, null) == 0);
-	}
-} else version(Windows) {
-	// The MS C runtime calls the handler from inside `abort`, so a plain `longjmp` leaves it; x86-64's `jmp_buf`, the largest, is 256 bytes.
-	private __gshared align(16) ubyte[512] abortEscape;
-
-	private extern(C) {
-		int _setjmp(void* buffer, void* frame);
-		void longjmp(void* buffer, int value);
-	}
-
-	// `core.stdc.signal` declares `signal` without `@nogc nothrow`, so bind it here. `SIGABRT` is 22 on Windows.
-	private alias AbortHandler = extern(C) void function(int) @nogc nothrow;
-	private extern(C) AbortHandler signal(int sig, AbortHandler handler);
-	private enum int SIGABRT = 22;
-
-	private alias SavedAbortHandler = AbortHandler;
-
-	private void installAbortHandler(out SavedAbortHandler saved) {
-		saved = signal(SIGABRT, &onAbort);
-	}
-
-	private void restoreAbortHandler(ref SavedAbortHandler saved) {
-		cast(void) signal(SIGABRT, saved);
-	}
-}
-
-// Whether `aborts` can watch `fatal`: on WASI `abort` traps, ending every thread, so tests skip the checks that need it.
-version(WASI) private enum bool catchesAborts = false;
-else private enum bool catchesAborts = true;
-
-static if (catchesAborts) {
-	private extern(C) void onAbort(int) @nogc nothrow {
-		// Windows resets a handler to the default as it raises, so reinstall it to keep one arming good for any number of aborts.
-		version(Windows) cast(void) signal(SIGABRT, &onAbort);
-		version(Posix) siglongjmp(abortEscape.ptr, 1);
-		else version(Windows) longjmp(abortEscape.ptr, 1);
-	}
-
-	// Runs `attempt` and reports whether it reached `mizu.error.fatal`; tail-call dispatch means the abandoned VM occupied only one frame.
-	private bool aborts(scope void delegate() @nogc nothrow attempt) @trusted {
-		SavedAbortHandler saved;
-		installAbortHandler(saved);
-
-		// `setjmp` records the frame it was called from, so it must be called here, in the frame being returned to.
-		version(Posix) immutable landed = sigsetjmpByPointer(abortEscape.ptr, 1) != 0;
-		else version(Windows) immutable landed = _setjmp(abortEscape.ptr, null) != 0;
-
-		// `__gshared` because a local's value across a `longjmp` is whatever the optimiser left in its register.
-		__gshared bool aborted;
-		aborted = true;
-		if (!landed) {
-			attempt();
-			aborted = false;
-		}
-
-		restoreAbortHandler(saved);
-
+// `fatal` ends the process, so these tests watch it through `fp.testing.aborts`, which WASI cannot offer.
+static if (fp.testing.catchesAborts) {
+	// Reports whether `attempt` reached `mizu.error.fatal`; tail-call dispatch means the abandoned VM occupied only one frame.
+	private bool aborts(scope void delegate() @nogc nothrow attempt) {
+		immutable aborted = fp.testing.aborts(attempt);
 		// The jump skipped `startFromEnvironment`'s cleanup, and a leftover coroutine context would point into the abandoned run's frame.
 		static if (noHardwareThreads) Coroutine.clear();
-
 		return aborted;
 	}
 }
@@ -120,8 +36,8 @@ private enum bool callsForeign = hasFFIBackend && mizu.config.dynamicLoadingSupp
 export extern(C) {
 	/// A pointer in and a `u64` out.
 	ulong mizuTestLength(const(char)* text) @nogc nothrow {
-		import core.stdc.string : strlen;
-		return strlen(text);
+		static import fp.string;
+		return fp.string.sliceTerminated(text).length;
 	}
 
 	/// An `i32` in and an `i32` out, for the signed 32 bit call path.
@@ -202,7 +118,7 @@ unittest {
 		Opcode(&halt),
 	];
 	RegistersAndStack empty;
-	static if (catchesAborts) assert(aborts({ run(overflow[], empty); }));
+	static if (fp.testing.catchesAborts) assert(aborts({ run(overflow[], empty); }));
 }
 
 unittest {
@@ -272,13 +188,13 @@ unittest {
 unittest {
 	// label / findLabel / jumpTo: a function call and return.
 	static immutable Opcode[9] program = [
-		Opcode(&findLabel, 200).setImmediate(label2immediate("dbl")),
+		Opcode(&findLabel, 200).setImmediate(labelToImmediate("dbl")),
 		Opcode(&loadImmediate, Registers.a(0)).setImmediate(21),
 		Opcode(&jumpTo, Registers.ra, 200),
 		Opcode(&halt),
 
 		// dbl: a0 = a0 + a0; return
-		Opcode(&label).setImmediate(label2immediate("dbl")),
+		Opcode(&label).setImmediate(labelToImmediate("dbl")),
 		Opcode(&add, Registers.a(0), Registers.a(0), Registers.a(0)),
 		Opcode(&jumpTo, 0, Registers.ra),
 		Opcode(&halt),
@@ -292,13 +208,13 @@ unittest {
 
 // The D port of `tests/fib.cpp`: recursive fib(n) through Mizu's own stack.
 private immutable Opcode[30] fibProgram = [
-	Opcode(&findLabel, 200).setImmediate(label2immediate("fib")),
+	Opcode(&findLabel, 200).setImmediate(labelToImmediate("fib")),
 	// a0 = fib(a0)
 	Opcode(&jumpTo, Registers.ra, 200),
 	Opcode(&halt),
 
 	// Recursive Fibonacci
-	Opcode(&label).setImmediate(label2immediate("fib")),
+	Opcode(&label).setImmediate(labelToImmediate("fib")),
 	// if (a0 >= 3) skip "return 1"
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(3),
 	Opcode(&setIfGreaterEqual, Registers.t(0), Registers.a(0), Registers.t(0)),
@@ -377,9 +293,9 @@ unittest {
 
 	// Host pointer immediates are not compile-time constants, so this program is built at run time.
 	Opcode[36] program = [
-		Opcode(&findLabel, 200).setImmediate(label2immediate("bub")),   // outer loop
-		Opcode(&findLabel, 201).setImmediate(label2immediate("innr")),  // inner loop
-		Opcode(&findLabel, 202).setImmediate(label2immediate("done")),  // finished
+		Opcode(&findLabel, 200).setImmediate(labelToImmediate("bub")),   // outer loop
+		Opcode(&findLabel, 201).setImmediate(labelToImmediate("innr")),  // inner loop
+		Opcode(&findLabel, 202).setImmediate(labelToImmediate("done")),  // finished
 		Opcode(&loadImmediate, 204).setImmediate(ulong.sizeof),         // element size
 		Opcode(&loadImmediate, 206).setImmediate(1),                    // the constant 1
 		// a0 (size) = unsorted.length, 205 = size - 1
@@ -394,13 +310,13 @@ unittest {
 		Opcode(&copyMemory, Registers.t(1), Registers.t(2), Registers.t(0)),
 		// a1 (changed) = true
 		Opcode(&loadImmediate, Registers.a(1)).setImmediate(1),
-		Opcode(&label).setImmediate(label2immediate("bub")),
+		Opcode(&label).setImmediate(labelToImmediate("bub")),
 			// if (!changed) goto done
 			Opcode(&setIfEqual, Registers.t(0), Registers.a(1), 0),
 			Opcode(&branchTo, 0, Registers.t(0), 202),
 			Opcode(&loadImmediate, Registers.a(1)).setImmediate(0), // changed = false
 			Opcode(&loadImmediate, Registers.a(2)).setImmediate(0), // i = 0
-			Opcode(&label).setImmediate(label2immediate("innr")),
+			Opcode(&label).setImmediate(labelToImmediate("innr")),
 				// if (i >= size - 1) goto bub
 				Opcode(&setIfGreaterEqual, Registers.t(0), Registers.a(2), 205),
 				Opcode(&branchTo, 0, Registers.t(0), 200),
@@ -420,7 +336,7 @@ unittest {
 				Opcode(&stackStoreU64, 0, Registers.t(0), Registers.t(3)),
 				Opcode(&loadImmediate, Registers.a(1)).setImmediate(1),
 				Opcode(&jumpTo, 0, 201),
-		Opcode(&label).setImmediate(label2immediate("done")),
+		Opcode(&label).setImmediate(labelToImmediate("done")),
 		Opcode(&halt),
 	];
 
@@ -551,7 +467,7 @@ unittest {
 unittest {
 	// Fork a thread, hand a value back through a channel, and join it.
 	static immutable Opcode[12] program = [
-		Opcode(&findLabel, 200).setImmediate(label2immediate("work")),
+		Opcode(&findLabel, 200).setImmediate(labelToImmediate("work")),
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(1), // channel capacity
 		Opcode(&channelCreate, 220, Registers.t(0)),
 		Opcode(&forkTo, 221, 200),
@@ -561,7 +477,7 @@ unittest {
 		Opcode(&halt),
 
 		// work: send 42 down the channel and stop.
-		Opcode(&label).setImmediate(label2immediate("work")),
+		Opcode(&label).setImmediate(labelToImmediate("work")),
 		Opcode(&loadImmediate, Registers.t(1)).setImmediate(42),
 		Opcode(&channelSend, 0, 220, Registers.t(1)),
 		Opcode(&halt),
@@ -845,8 +761,8 @@ unittest {
 	// `findLabel` searches forward first and only then backward, so a label that is behind the search is found by the second pass.
 	static immutable Opcode[4] program = [
 		/* 0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
-		/* 1 */ Opcode(&label).setImmediate(label2immediate("bak")),
-		/* 2 */ Opcode(&findLabel, Registers.t(1)).setImmediate(label2immediate("bak")),
+		/* 1 */ Opcode(&label).setImmediate(labelToImmediate("bak")),
+		/* 2 */ Opcode(&findLabel, Registers.t(1)).setImmediate(labelToImmediate("bak")),
 		/* 3 */ Opcode(&halt),
 	];
 
@@ -856,7 +772,7 @@ unittest {
 
 	// And a label that is nowhere leaves the register at zero.
 	static immutable Opcode[2] missing = [
-		Opcode(&findLabel, Registers.t(1)).setImmediate(label2immediate("nope")),
+		Opcode(&findLabel, Registers.t(1)).setImmediate(labelToImmediate("nope")),
 		Opcode(&halt),
 	];
 
@@ -868,8 +784,8 @@ unittest {
 unittest {
 	// The backward search must examine the program's first instruction, where a loop's top label naturally sits, not stop before it.
 	static immutable Opcode[4] program = [
-		/* 0 */ Opcode(&label).setImmediate(label2immediate("top")),
-		/* 1 */ Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("top")),
+		/* 0 */ Opcode(&label).setImmediate(labelToImmediate("top")),
+		/* 1 */ Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("top")),
 		/* 2 */ Opcode(&loadImmediate, Registers.t(1)).setImmediate(7),
 		/* 3 */ Opcode(&halt),
 	];
@@ -931,7 +847,7 @@ unittest {
 	RegistersAndStack env;
 	run(program[], env);
 
-	static float f32(ref RegistersAndStack e, Reg r) @trusted {
+	static float f32(ref RegistersAndStack e, Register r) @trusted {
 		return *cast(float*)&e.memory[r];
 	}
 
@@ -1004,7 +920,7 @@ unittest {
 	RegistersAndStack env;
 	run(program[], env);
 
-	static double f64(ref RegistersAndStack e, Reg r) @trusted {
+	static double f64(ref RegistersAndStack e, Register r) @trusted {
 		return *cast(double*)&e.memory[r];
 	}
 
@@ -1092,8 +1008,8 @@ unittest {
 	assert(env.memory[Registers.t(2)] == 0);
 	static if (size_t.sizeof < ulong.sizeof) assert(env.memory[Registers.t(3)] == 0);
 	else {
-		import core.stdc.stdlib : free;
-		free(cast(void*) env.memory[Registers.t(3)]);
+		static import fp.pointer;
+		cast(void) fp.pointer.allocator(cast(void*) env.memory[Registers.t(3)], 0);
 	}
 }
 
@@ -1205,7 +1121,7 @@ unittest {
 	import mizu.ffi;
 
 	// a(i) = staged register `from`.
-	static Opcode argument(size_t i, Reg from) { return Opcode(&add, Registers.a(i), from, Registers.zero); }
+	static Opcode argument(size_t i, Register from) { return Opcode(&add, Registers.a(i), from, Registers.zero); }
 
 	static immutable Opcode[] program = [
 		// t0 = mizuTestMixed(7, -2^40, 1.5f, -2.25)
@@ -1300,7 +1216,7 @@ unittest {
 		Opcode(&loadUpperImmediate, Registers.a(0)).setHostPointerUpperImmediate(first.ptr),
 		Opcode(&loadImmediate, Registers.a(1)).setHostPointerLowerImmediate(second.ptr),
 		Opcode(&loadUpperImmediate, Registers.a(1)).setHostPointerUpperImmediate(second.ptr),
-		Opcode(&loadFirstLibraryThatExists, Registers.t(0)).setImmediate(2),
+		Opcode(&loadFirstFound, Registers.t(0)).setImmediate(2),
 
 		Opcode(&loadImmediate, Registers.t(1)).setHostPointerLowerImmediate(missing.ptr),
 		Opcode(&loadUpperImmediate, Registers.t(1)).setHostPointerUpperImmediate(missing.ptr),
@@ -1319,7 +1235,7 @@ unittest {
 	assert(close(cast(Library*) env.memory[Registers.t(0)]));
 }
 
-static if (catchesAborts && hasFFIBackend)
+static if (fp.testing.catchesAborts && hasFFIBackend)
 unittest {
 	// An interface has to describe at least a return type, so building one from an empty type stack is fatal.
 	import mizu.ffi;
@@ -1334,7 +1250,7 @@ unittest {
 	assert(aborts({ run(program[], env); }));
 }
 
-static if (catchesAborts && hasFFIBackend)
+static if (fp.testing.catchesAborts && hasFFIBackend)
 unittest {
 	// A signature wider than the argument registers is fatal, before the function pointer (here, null) is ever used.
 	import mizu.ffi;
@@ -1353,34 +1269,32 @@ unittest {
 	assert(aborts({ run(program[], env); }));
 }
 
-static if (catchesAborts && hasFFIBackend)
+static if (fp.testing.catchesAborts && hasFFIBackend)
 unittest {
 	// A type stack that cannot grow is fatal.
 	import mizu.ffi;
-	static import fp.testing;
 
 	static immutable Opcode[2] push = [Opcode(&pushTypeU64), Opcode(&halt)];
 	static immutable Opcode[2] clear = [Opcode(&clearTypeStack), Opcode(&halt)];
 	RegistersAndStack env;
-	auto previous = fp.testing.beginRationedAllocator(0);
+	auto previous = fp.testing.limitAllocations(0);
 	immutable aborted = aborts({ foreach (i; 0 .. 1 << 20) run(push[], env); });
-	fp.testing.endRationedAllocator(previous);
+	fp.testing.restoreAllocator(previous);
 	assert(aborted);
 	run(clear[], env);
 }
 
-static if (catchesAborts && noHardwareThreads)
+static if (fp.testing.catchesAborts && noHardwareThreads)
 unittest {
 	// So is an execution context that cannot be stored.
-	static import fp.testing;
 
 	Opcode instruction;
 	RegistersAndStack env;
 	setupEnvironment(env, &instruction, &instruction + 1);
 	Coroutine.clear();
-	auto previous = fp.testing.beginRationedAllocator(0);
+	auto previous = fp.testing.limitAllocations(0);
 	immutable aborted = aborts({ Coroutine.start(&instruction, &env); });
-	fp.testing.endRationedAllocator(previous);
+	fp.testing.restoreAllocator(previous);
 	assert(aborted);
 	Coroutine.clear();
 }
@@ -1388,11 +1302,11 @@ unittest {
 static if (noHardwareThreads)
 unittest {
 	// Coroutine back-pressure: the worker idles, so main deterministically fills the channel, then `channelSend` and `joinThread` rewind and yield.
-	enum Reg data = 220, worker = 221, results = 222;
+	enum Register data = 220, worker = 221, results = 222;
 	enum Opcode nop = Opcode(&add, 0, 0, 0); // Writes x0, which stays zero.
 
 	static immutable Opcode[27] program = [
-		/*  0 */ Opcode(&findLabel, 200).setImmediate(label2immediate("wrk")),
+		/*  0 */ Opcode(&findLabel, 200).setImmediate(labelToImmediate("wrk")),
 		/*  1 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(1), // capacity
 		/*  2 */ Opcode(&channelCreate, data, Registers.t(0)),
 		/*  3 */ Opcode(&channelCreate, results, Registers.t(0)),
@@ -1412,7 +1326,7 @@ unittest {
 		/* 15 */ Opcode(&halt),
 
 		// wrk: dawdle, then drain the channel and send back the total.
-		/* 16 */ Opcode(&label).setImmediate(label2immediate("wrk")),
+		/* 16 */ Opcode(&label).setImmediate(labelToImmediate("wrk")),
 		/* 17 */ nop,
 		/* 18 */ nop,
 		/* 19 */ nop,
@@ -1467,12 +1381,12 @@ unittest {
 static if (noHardwareThreads)
 unittest {
 	// Coroutine blocking locks yield until the worker clears main's lock register, through a `pointerToRegister` address taken before the fork.
-	enum Reg lock = Registers.t(0), address = Registers.t(1);
-	enum Reg witness = Registers.t(2), worker = 220;
+	enum Register lock = Registers.t(0), address = Registers.t(1);
+	enum Register witness = Registers.t(2), worker = 220;
 	enum Opcode nop = Opcode(&add, 0, 0, 0); // Writes x0, which stays zero.
 
 	static immutable Opcode[17] program = [
-		/*  0 */ Opcode(&findLabel, 200).setImmediate(label2immediate("wrk")),
+		/*  0 */ Opcode(&findLabel, 200).setImmediate(labelToImmediate("wrk")),
 		/*  1 */ Opcode(&pointerToRegister, address, lock),
 		/*  2 */ Opcode(&mutexCreate, lock),
 		/*  3 */ Opcode(&mutexWriteLock, 0, lock), // Uncontended: taken at once.
@@ -1487,7 +1401,7 @@ unittest {
 		/* 11 */ Opcode(&halt),
 
 		// wrk: clear the main context's lock register, twice, spaced so that each clear lands while main is waiting rather than before it starts.
-		/* 12 */ Opcode(&label).setImmediate(label2immediate("wrk")),
+		/* 12 */ Opcode(&label).setImmediate(labelToImmediate("wrk")),
 		/* 13 */ Opcode(&setMemoryImmediate, address, 0, 8),
 		/* 14 */ nop,
 		/* 15 */ Opcode(&setMemoryImmediate, address, 0, 8),
@@ -1609,7 +1523,7 @@ unittest {
 }
 
 // The coverage build's asserts throw rather than abort, so `aborts` cannot catch them there.
-version(MizuCoverage) {} else static if (catchesAborts) unittest {
+version(MizuCoverage) {} else static if (fp.testing.catchesAborts) unittest {
 	// The pointer twins assert their address is aligned rather than tearing silently.
 	static immutable Opcode[4] program = [
 		Opcode(&pointerToRegister, Registers.t(1), Registers.t(0)),

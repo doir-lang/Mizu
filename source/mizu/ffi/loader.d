@@ -1,7 +1,7 @@
 /**
 * Thin wrapper over the platform's dynamic loader (`dlopen`/`dlsym` on POSIX, `LoadLibrary`/`GetProcAddress` on Windows).
 *
-* `-betterC` has no exceptions, so where the C++ original threw, every function here returns null or false and leaves the reason in `lastError`, which is what lets `loadFirstThatExists` try each path in turn.
+* `-betterC` has no exceptions, so where the C++ original threw, every function here returns null or false and leaves the reason in `lastError`, which is what lets `loadFirstFound` try each path in turn.
 */
 module mizu.ffi.loader;
 
@@ -70,12 +70,13 @@ Library* loadShared(scope const(char)[] path, bool appendPlatformDecorator = fal
 			return cast(Library*) fail("Library path is empty.");
 
 		// libfp strings are NUL terminated, so this is the C string the platform wants.
-		char* name = fp.string.makeDynamic(path);
-		if (name is null)
+		auto cloned = fp.string.clone(path);
+		if (cloned.isNull)
 			return cast(Library*) fail("Failed to allocate the library's path.");
+		char* name = cloned.get;
 		scope(exit) fp.string.free(name);
 
-		if (appendPlatformDecorator && sharedLibraryExtension.length && fp.string.concatenate(name, sharedLibraryExtension) is null)
+		if (appendPlatformDecorator && sharedLibraryExtension.length && !fp.string.concatenate(name, sharedLibraryExtension))
 			return cast(Library*) fail("Failed to allocate the library's path.");
 
 		version(Posix) {
@@ -103,12 +104,12 @@ alias loadLibrary = loadShared;
 * Examples:
 * ---
 * static immutable const(char)[][3] names = ["libc.so.6", "libSystem.B.dylib", "msvcrt"];
-* Library* c = loadFirstThatExists(names[]);
+* Library* c = loadFirstFound(names[]);
 * assert(c !is null);
 * assert(close(c));
 * ---
 */
-Library* loadFirstThatExists(scope const(const(char)[])[] paths, bool appendPlatformDecorator = false) {
+Library* loadFirstFound(scope const(const(char)[])[] paths, bool appendPlatformDecorator = false) {
 	foreach (path; paths)
 		if (auto library = loadShared(path, appendPlatformDecorator))
 			return library;
@@ -160,7 +161,7 @@ Library* loadCurrentExecutable() @trusted {
 * Examples:
 * ---
 * static immutable const(char)[][3] names = ["libc.so.6", "libSystem.B.dylib", "msvcrt"];
-* Library* c = loadFirstThatExists(names[]);
+* Library* c = loadFirstFound(names[]);
 * scope(exit) cast(void) close(c);
 * assert(lookup("malloc", c) !is null);
 * assert(lookup("mizu_definitely_not_a_symbol", c) is null);
@@ -244,8 +245,8 @@ version(unittest) {
 static if (mizu.config.dynamicLoadingSupported)
 unittest {
 	// Both spellings are tried, so the decorated path runs even where the undecorated one already works.
-	auto plain = loadFirstThatExists(cRuntimeNames[], false);
-	auto decorated = loadFirstThatExists(cRuntimeNames[], true);
+	auto plain = loadFirstFound(cRuntimeNames[], false);
+	auto decorated = loadFirstFound(cRuntimeNames[], true);
 	scope(exit) if (plain !is null) assert(close(plain));
 	scope(exit) if (decorated !is null) assert(close(decorated));
 
@@ -270,31 +271,31 @@ unittest {
 	static immutable const(char)[][2] nothing = [
 		"mizu_no_such_library_a", "mizu_no_such_library_b",
 	];
-	assert(loadFirstThatExists(nothing[], false) is null);
+	assert(loadFirstFound(nothing[], false) is null);
 	assert(lastError !is null);
 }
 
 unittest {
 	// libfp's allocator is a plain global, so refusing the copy of the library's path can be staged.
-	static fp.pointer.AllocFunction previous;
+	static fp.pointer.Allocator previous;
 	static void* refuse(void* p, size_t size) @nogc nothrow {
 		if (size == 0) return previous(p, 0); // Still let callers clean up.
 		return null;
 	}
 
-	previous = fp.pointer.allocFunction;
-	fp.pointer.allocFunction = &refuse;
+	previous = fp.pointer.allocator;
+	fp.pointer.allocator = &refuse;
 	auto library = loadShared("libc.so.6", false);
-	fp.pointer.allocFunction = previous;
+	fp.pointer.allocator = previous;
 
 	assert(library is null);
 	assert(lastError !is null);
 
 	// So can refusing to append the platform's extension to it.
 	static import fp.testing;
-	auto rationed = fp.testing.beginRationedAllocator(1);
+	auto rationed = fp.testing.limitAllocations(1);
 	auto decorated = loadShared("mizu_definitely_not_a_library", true);
-	fp.testing.endRationedAllocator(rationed);
+	fp.testing.restoreAllocator(rationed);
 	assert(decorated is null && lastError !is null);
 }
 

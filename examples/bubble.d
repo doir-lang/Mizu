@@ -5,7 +5,7 @@
 */
 module examples.bubble;
 
-import core.stdc.stdio : printf;
+static import fp.io;
 
 import mizu;
 
@@ -28,9 +28,9 @@ immutable ulong[100] sorted = [
 extern(C) int main() {
 	// The array's address is only known at run time, so unlike the other examples this program cannot be a compile-time constant.
 	Opcode[36] program = [
-		Opcode(&findLabel, 200).setImmediate(label2immediate("bub")),   // outer loop
-		Opcode(&findLabel, 201).setImmediate(label2immediate("innr")),  // inner loop
-		Opcode(&findLabel, 202).setImmediate(label2immediate("done")),  // finished
+		Opcode(&findLabel, 200).setImmediate(labelToImmediate("bub")),   // outer loop
+		Opcode(&findLabel, 201).setImmediate(labelToImmediate("innr")),  // inner loop
+		Opcode(&findLabel, 202).setImmediate(labelToImmediate("done")),  // finished
 		Opcode(&loadImmediate, 204).setImmediate(ulong.sizeof),         // element size
 		Opcode(&loadImmediate, 206).setImmediate(1),                    // the constant 1
 		// a0 (size) = numbers.length, 205 = size - 1
@@ -45,13 +45,13 @@ extern(C) int main() {
 		Opcode(&copyMemory, Registers.t(1), Registers.t(2), Registers.t(0)),
 		// a1 (changed) = true
 		Opcode(&loadImmediate, Registers.a(1)).setImmediate(1),
-		Opcode(&label).setImmediate(label2immediate("bub")),
+		Opcode(&label).setImmediate(labelToImmediate("bub")),
 			// if (!changed) goto done
 			Opcode(&setIfEqual, Registers.t(0), Registers.a(1), 0),
 			Opcode(&branchTo, 0, Registers.t(0), 202),
 			Opcode(&loadImmediate, Registers.a(1)).setImmediate(0), // changed = false
 			Opcode(&loadImmediate, Registers.a(2)).setImmediate(0), // i = 0
-			Opcode(&label).setImmediate(label2immediate("innr")),
+			Opcode(&label).setImmediate(labelToImmediate("innr")),
 				// if (i >= size - 1) goto bub
 				Opcode(&setIfGreaterEqual, Registers.t(0), Registers.a(2), 205),
 				Opcode(&branchTo, 0, Registers.t(0), 200),
@@ -71,7 +71,7 @@ extern(C) int main() {
 				Opcode(&stackStoreU64, 0, Registers.t(0), Registers.t(3)),
 				Opcode(&loadImmediate, Registers.a(1)).setImmediate(1),
 				Opcode(&jumpTo, 0, 201),
-		Opcode(&label).setImmediate(label2immediate("done")),
+		Opcode(&label).setImmediate(labelToImmediate("done")),
 		Opcode(&halt),
 	];
 
@@ -83,11 +83,10 @@ extern(C) int main() {
 	auto result = cast(const(ulong)*)(environment.stackBottom - numbers.length * ulong.sizeof);
 	foreach (i; 0 .. numbers.length)
 		if (result[i] != sorted[i]) {
-			printf("Mismatch at index %d: expected %llu, got %llu\n",
-				cast(int) i, sorted[i], result[i]);
+			cast(void) fp.io.print("Mismatch at index ", i, ": expected ", sorted[i], ", got ", result[i], '\n');
 			return 1;
 		}
 
-	printf("Sorted %d numbers correctly.\n", cast(int) numbers.length);
+	cast(void) fp.io.print("Sorted ", numbers.length, " numbers correctly.\n");
 	return 0;
 }

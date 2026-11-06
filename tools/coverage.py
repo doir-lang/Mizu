@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Measures per-module unittest coverage; pass -v to list uncovered lines. Set DC to use a compiler other than ldc2."""
+"""Measures per-module unittest coverage. Set DC to use a compiler other than ldc2.
+
+Usage: tools/coverage.py [-v]    (-v lists the uncovered lines)
+"""
 import glob, os, platform, re, shutil, subprocess, sys
 
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -10,6 +13,7 @@ prefix = 'source-'
 
 
 def describe(*args):
+	"""Runs `dub describe` with `args` and returns its non-empty output lines; exits with dub's output if it fails."""
 	result = subprocess.run(['dub', 'describe', *args, '-c', 'unittest', '--compiler=' + compiler],
 		cwd=root, capture_output=True, text=True)
 	if result.returncode != 0:
@@ -17,8 +21,8 @@ def describe(*args):
 	return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
-# -cov names each listing after the path it compiled, so relative paths give the same names on every platform.
 def relative_to_root(path):
+	"""Returns `path` relative to the root when it lies inside it, else unchanged: -cov names each listing after the path it compiled, so relative paths give the same names on every platform."""
 	path = os.path.normpath(path)
 	try:
 		inside = os.path.commonpath([root, os.path.abspath(path)]) == root
@@ -28,8 +32,8 @@ def relative_to_root(path):
 	return os.path.relpath(path, root) if inside else path
 
 
-# Mirrors dub.json's `libs-*` and `lflags-*`; the FFI tests' callbacks need the executable's symbols exported.
 def link_flags():
+	"""Mirrors dub.json's `libs-*` and `lflags-*`; the FFI tests' callbacks need the executable's symbols exported."""
 	if os.name == 'nt':
 		# tools/vcpkg-libffi.ps1 stages libffi here; a missing LIBPATH is ignored, so one on LIB still resolves.
 		return ['-L=/LIBPATH:' + os.path.join(root, '.vcpkg', 'lib'), '-L=ffi.lib']
@@ -42,6 +46,7 @@ def link_flags():
 
 
 def build_and_run():
+	"""Builds the unittests as plain D with -cov and runs them from the root, leaving the listings in bin/coverage; exits if the build or a test fails."""
 	import_paths = [relative_to_root(p) for p in describe('--import-paths')]
 	sources = [relative_to_root(p) for p in describe('--data=source-files', '--data-list')]
 	if not import_paths or not sources:
@@ -79,8 +84,8 @@ def build_and_run():
 			sys.exit(run.stdout + run.stderr)
 
 
-# Maps each source to {line: (hits, text)}; lines with no count were compiled out, so are not code.
 def read_listings():
+	"""Maps each source to {line: (hits, text)}; lines with no count were compiled out, so are not code."""
 	files = {}
 	listings = glob.glob(os.path.join(root, out, '*', prefix + '*.lst'))
 	for listing in sorted(listings, key=os.path.basename):
@@ -98,6 +103,7 @@ def read_listings():
 
 
 def report(files, verbose):
+	"""Prints each file's coverage and the total, and every uncovered line if `verbose`."""
 	all_covered = all_total = 0
 	for name, counts in files.items():
 		missed = sorted(n for n, (hits, _) in counts.items() if hits == 0)

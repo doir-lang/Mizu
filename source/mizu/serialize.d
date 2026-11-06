@@ -22,13 +22,14 @@ struct SerializationOpcode {
 	/// The instruction's `mizu.lookup` ID, always 64 bits wide.
 	ulong op;
 	/// Ditto `Opcode.out_`
-	mizu.opcode.Reg out_;
+	mizu.opcode.Register out_;
 	/// Ditto `Opcode.a`
-	mizu.opcode.Reg a;
+	mizu.opcode.Register a;
 	/// Ditto `Opcode.b`
-	mizu.opcode.Reg b;
+	mizu.opcode.Register b;
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * Widens a runtime `Opcode`, keeping its op as a raw pointer value; ID substitution happens separately.
 *
@@ -43,6 +44,7 @@ SerializationOpcode fromOpcode(const mizu.opcode.Opcode code) {
 	return SerializationOpcode(cast(size_t) code.op, code.out_, code.a, code.b);
 }
 
+// wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
 * Narrows a `SerializationOpcode` whose op holds a raw pointer value back to a runtime `Opcode`.
 *

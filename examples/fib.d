@@ -5,7 +5,7 @@
 */
 module examples.fib;
 
-import core.stdc.stdio : printf;
+static import fp.io;
 
 import mizu;
 
@@ -13,7 +13,7 @@ enum uint target = 30;
 
 /// Everything up to restoring `a2`; split only to keep the literals readable.
 immutable Opcode[32] fibHead = [
-	Opcode(&findLabel, 200).setImmediate(label2immediate("fib")),
+	Opcode(&findLabel, 200).setImmediate(labelToImmediate("fib")),
 	// a0 = target, then a0 = fib(a0)
 	Opcode(&loadImmediate, Registers.a(0)).setImmediate(target),
 	Opcode(&jumpTo, Registers.ra, 200),
@@ -21,7 +21,7 @@ immutable Opcode[32] fibHead = [
 	Opcode(&halt),
 
 	// Recursive Fibonacci
-	Opcode(&label).setImmediate(label2immediate("fib")),
+	Opcode(&label).setImmediate(labelToImmediate("fib")),
 	// if (a0 >= 3) skip "return 1"
 	Opcode(&loadImmediate, Registers.t(0)).setImmediate(3),
 	Opcode(&setIfGreaterEqual, Registers.t(0), Registers.a(0), Registers.t(0)),
@@ -70,7 +70,7 @@ immutable Opcode[4] fibTail = [
 immutable Opcode[36] program = fibHead ~ fibTail;
 
 extern(C) int main() {
-	printf("fib(%u) = ", target);
+	cast(void) fp.io.print("fib(", target, ") = ");
 
 	RegistersAndStack environment;
 	setupEnvironment(environment, program[]);

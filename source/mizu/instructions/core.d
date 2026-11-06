@@ -1,12 +1,12 @@
 /**
 * Mizu's core instruction set: labels and jumps, the register/stack moves, the comparisons and the integer arithmetic.
 *
-* Every instruction has the `mizu.opcode.Instruction` signature and ends by mixing in `mizuNext`, which tail-calls whatever instruction the program counter now points at.
+* Every instruction has the `mizu.opcode.Instruction` signature and ends by mixing in `nextInstruction`, which tail-calls whatever instruction the program counter now points at.
 */
 module mizu.instructions.core;
 
-import core.stdc.stdio : printf, fflush, stdout;
-
+static import fp.io;
+static import fp.string;
 static import mizu.config;
 import mizu.opcode;
 
@@ -23,11 +23,11 @@ import mizu.opcode;
 *
 * Examples:
 * ---
-* static assert(label2immediate("fib") != label2immediate("bub"));
-* static assert(label2immediate("threadA") == label2immediate("threadB"));
+* static assert(labelToImmediate("fib") != labelToImmediate("bub"));
+* static assert(labelToImmediate("threadA") == labelToImmediate("threadB"));
 * ---
 */
-uint label2immediate(scope const(char)[] label) {
+uint labelToImmediate(scope const(char)[] label) {
 	uint result = 0;
 	foreach (i; 0 .. label.length > uint.sizeof ? uint.sizeof : label.length)
 		result |= cast(uint) cast(ubyte) label[i] << (i * 8);
@@ -55,13 +55,13 @@ extern(C):
 * Noop marking a label that `findLabel` can find and `jumpTo` can jump to.
 *
 * Params:
-*   immediate = the label's value, usually from `label2immediate`
+*   immediate = the label's value, usually from `labelToImmediate`
 *
 * Examples:
 * ---
 * static immutable Opcode[3] program = [
-* 	Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("here")),
-* 	Opcode(&label).setImmediate(label2immediate("here")),
+* 	Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("here")),
+* 	Opcode(&label).setImmediate(labelToImmediate("here")),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -71,7 +71,7 @@ extern(C):
 * ---
 */
 void* label(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -88,9 +88,9 @@ void* label(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * Examples:
 * ---
 * static immutable Opcode[4] program = [
-* 	Opcode(&label).setImmediate(label2immediate("top")),
-* 	Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("top")),
-* 	Opcode(&findLabel, Registers.t(1)).setImmediate(label2immediate("none")),
+* 	Opcode(&label).setImmediate(labelToImmediate("top")),
+* 	Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("top")),
+* 	Opcode(&findLabel, Registers.t(1)).setImmediate(labelToImmediate("none")),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -120,7 +120,7 @@ void* findLabel(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 			}
 			if (cur is programStart) break;
 		}
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -146,7 +146,7 @@ void* halt(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 }
 
 /**
-* Prints the value in a register as `u64`, `i64`, `f64` and `f32` to stdout, flushing it.
+* Prints the value in a register as `u64`, `i64`, `f64` and `f32` to standard output, unbuffered, through `fp.io.writeAll`.
 *
 * Params:
 *   out_ = register to store how many characters were printed in (negative on failure)
@@ -167,9 +167,12 @@ void* halt(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* debugPrint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto value = &registers[pc.a];
-	registers[pc.out_] = printf("u64 = %llu, i64 = %lld, f64 = %f, f32 = %f\n", *value, *cast(long*) value, *cast(double*) value, cast(double)*cast(float*) value);
-	cast(void) fflush(stdout);
-	mixin(mizuNext);
+	char* text = null;
+	immutable built = fp.string.append(text, "u64 = ", *value, ", i64 = ", *cast(long*) value, ", f64 = ", *cast(double*) value, ", f32 = ", *cast(float*) value, '\n');
+	registers[pc.out_] = built && fp.io.writeAll(fp.io.Console.output, fp.string.slice(text)) ? fp.string.length(text) : cast(ulong) -1L;
+	// Freed here, not in a `scope(exit)`, which would keep `nextInstruction` from being a tail call.
+	fp.string.free(text);
+	mixin(nextInstruction);
 }
 
 /**
@@ -195,11 +198,12 @@ void* debugPrint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 void* debugPrintBinary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto bytes = cast(const(ubyte)*)&registers[pc.a];
 
-	cast(void) printf("binary = ");
+	char[8 * ulong.sizeof] bits;
+	size_t at = 0;
 	for (byte i = ulong.sizeof - 1; i >= 0; --i)
 		for (byte j = 7; j >= 0; --j)
-			cast(void) printf("%u", (bytes[i] >> j) & 1);
-	cast(void) printf(", ");
+			bits[at++] = cast(char)('0' + ((bytes[i] >> j) & 1));
+	cast(void) fp.io.print("binary = ", bits[], ", ");
 
 	return debugPrint(pc, registers, env, sp);
 }
@@ -227,7 +231,7 @@ void* debugPrintBinary(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* loadImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = immediate(*pc);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -254,7 +258,7 @@ void* loadImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* loadUpperImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] |= cast(ulong) immediate(*pc) << 32;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -279,7 +283,7 @@ void* loadUpperImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 */
 void* convertToU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -304,7 +308,7 @@ void* convertToU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* convertToU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	*cast(uint*)&registers[pc.out_] = cast(uint) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -329,7 +333,7 @@ void* convertToU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* convertToU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	*cast(ushort*)&registers[pc.out_] = cast(ushort) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -354,7 +358,7 @@ void* convertToU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	*cast(ubyte*)&registers[pc.out_] = cast(ubyte) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -380,7 +384,7 @@ void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ulong*) stackAddress(env, sp, registers[pc.a], ulong.sizeof);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -407,7 +411,7 @@ void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ulong*) stackAddress(env, sp, registers[pc.b], ulong.sizeof) = registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -433,7 +437,7 @@ void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(uint*) stackAddress(env, sp, registers[pc.a], uint.sizeof);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -460,7 +464,7 @@ void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(uint*) stackAddress(env, sp, registers[pc.b], uint.sizeof) = cast(uint) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -486,7 +490,7 @@ void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ushort*) stackAddress(env, sp, registers[pc.a], ushort.sizeof);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -513,7 +517,7 @@ void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ushort*) stackAddress(env, sp, registers[pc.b], ushort.sizeof) = cast(ushort) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -539,7 +543,7 @@ void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *stackAddress(env, sp, registers[pc.a], ubyte.sizeof);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -566,7 +570,7 @@ void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *stackAddress(env, sp, registers[pc.b], ubyte.sizeof) = cast(ubyte) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -593,7 +597,7 @@ void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 void* stackPush(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp -= registers[pc.a];
 	assert(onStack(env, sp, 0), "mizu: stack overflow");
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -619,7 +623,7 @@ void* stackPush(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 void* stackPushImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp -= immediate(*pc);
 	assert(onStack(env, sp, 0), "mizu: stack overflow");
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -647,7 +651,7 @@ void* stackPushImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 void* stackPop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp += registers[pc.a];
 	assert(onStack(env, sp, 0), "mizu: stack underflow");
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -674,7 +678,7 @@ void* stackPop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 void* stackPopImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	sp += immediate(*pc);
 	assert(onStack(env, sp, 0), "mizu: stack underflow");
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -703,7 +707,7 @@ void* offsetOfStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 	auto bottom = env.stackBottom - offset;
 	assert(onStack(env, bottom, 0), "mizu: offset is not on the stack");
 	registers[pc.out_] = bottom - sp;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -733,7 +737,7 @@ void* jumpRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc += offset - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -759,7 +763,7 @@ void* jumpRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 void* jumpRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc += immediateSigned(*pc) - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -772,10 +776,10 @@ void* jumpRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env
 * Examples:
 * ---
 * static immutable Opcode[5] program = [
-* 	Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("end")),
+* 	Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("end")),
 * 	Opcode(&jumpTo, 0, Registers.t(0)),
 * 	Opcode(&loadImmediate, Registers.t(1)).setImmediate(1),
-* 	Opcode(&label).setImmediate(label2immediate("end")),
+* 	Opcode(&label).setImmediate(labelToImmediate("end")),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -788,7 +792,7 @@ void* jumpTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	auto target = cast(Opcode*) registers[pc.a];
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc = target - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -821,7 +825,7 @@ void* branchRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	if (condition)
 		pc += offset - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -851,7 +855,7 @@ void* branchRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* e
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	if (condition)
 		pc += branchImmediate(*pc) - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -865,11 +869,11 @@ void* branchRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* e
 * Examples:
 * ---
 * static immutable Opcode[6] program = [
-* 	Opcode(&findLabel, Registers.t(0)).setImmediate(label2immediate("end")),
+* 	Opcode(&findLabel, Registers.t(0)).setImmediate(labelToImmediate("end")),
 * 	Opcode(&loadImmediate, Registers.t(1)).setImmediate(1),
 * 	Opcode(&branchTo, 0, Registers.t(1), Registers.t(0)),
 * 	Opcode(&loadImmediate, Registers.t(2)).setImmediate(1),
-* 	Opcode(&label).setImmediate(label2immediate("end")),
+* 	Opcode(&label).setImmediate(labelToImmediate("end")),
 * 	Opcode(&halt),
 * ];
 * RegistersAndStack env;
@@ -884,7 +888,7 @@ void* branchTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	if (condition)
 		pc = target - 1;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -913,7 +917,7 @@ void* branchTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 */
 void* setIfEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] == registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -942,7 +946,7 @@ void* setIfEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 */
 void* setIfNotEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] != registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -971,7 +975,7 @@ void* setIfNotEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* setIfLess(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] < registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -998,7 +1002,7 @@ void* setIfLess(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 */
 void* setIfLessSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(long*)&registers[pc.a] < *cast(long*)&registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1026,7 +1030,7 @@ void* setIfLessSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* setIfGreaterEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] >= registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1052,7 +1056,7 @@ void* setIfGreaterEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 */
 void* setIfGreaterEqualSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(long*)&registers[pc.a] >= *cast(long*)&registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1079,7 +1083,7 @@ void* setIfGreaterEqualSigned(Opcode* pc, ulong* registers, RegistersAndStack* e
 */
 void* add(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] + registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1106,7 +1110,7 @@ void* add(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* subtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] - registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1133,7 +1137,7 @@ void* subtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 */
 void* multiply(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] * registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1160,7 +1164,7 @@ void* multiply(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 */
 void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] / registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1187,7 +1191,7 @@ void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* remainder(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] % registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1214,7 +1218,7 @@ void* remainder(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 */
 void* shiftLeft(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] << registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1241,7 +1245,7 @@ void* shiftLeft(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 */
 void* shiftRightLogical(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] >> registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1268,7 +1272,7 @@ void* shiftRightLogical(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 */
 void* shiftRightArithmetic(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(long*)&registers[pc.a] >> registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1295,7 +1299,7 @@ void* shiftRightArithmetic(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* bitwiseXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] ^ registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1322,7 +1326,7 @@ void* bitwiseXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 */
 void* bitwiseAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] & registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -1349,14 +1353,14 @@ void* bitwiseAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 */
 void* bitwiseOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = registers[pc.a] | registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 unittest {
-	static assert(label2immediate("fib") == label2immediate("fib"));
-	static assert(label2immediate("fib") != label2immediate("bub"));
+	static assert(labelToImmediate("fib") == labelToImmediate("fib"));
+	static assert(labelToImmediate("fib") != labelToImmediate("bub"));
 	// Only the first four characters matter.
-	static assert(label2immediate("threadA") == label2immediate("threadB"));
+	static assert(labelToImmediate("threadA") == labelToImmediate("threadB"));
 }
 
 unittest {
@@ -1378,10 +1382,10 @@ unittest {
 		Opcode(&loadImmediate, Registers.t(0)).setImmediate(1),
 		Opcode(&branchTo, Registers.zero, Registers.zero, Registers.zero),
 		Opcode(&loadImmediate, Registers.t(1)).setImmediate(1),
-		Opcode(&findLabel, Registers.t(2)).setImmediate(label2immediate("end")),
+		Opcode(&findLabel, Registers.t(2)).setImmediate(labelToImmediate("end")),
 		Opcode(&jumpTo, Registers.t(2), Registers.t(2)),
 		Opcode(&halt),
-		Opcode(&label).setImmediate(label2immediate("end")),
+		Opcode(&label).setImmediate(labelToImmediate("end")),
 		Opcode(&halt),
 	];
 

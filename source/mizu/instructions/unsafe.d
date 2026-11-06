@@ -5,13 +5,12 @@
 */
 module mizu.instructions.unsafe;
 
-import core.stdc.stdio : fflush, fputs, stdout;
-import core.stdc.stdlib : malloc, free;
-import core.stdc.string : memcpy, memset;
 
 static import core.checkedint;
 
+static import fp.io;
 static import fp.pointer;
+static import fp.string;
 
 import mizu.opcode;
 
@@ -25,7 +24,7 @@ private size_t hostSize(ulong bytes) {
 extern(C):
 
 /**
-* Allocates memory on the host application heap with C `malloc`.
+* Allocates memory on the host application heap through `fp.pointer.allocator`, without a fat-pointer header; unless the host replaced that allocator, it is C's `realloc`, so C code may free the allocation.
 *
 * Params:
 *   out_ = register to store a pointer to the allocation in, or zero if it failed
@@ -50,8 +49,8 @@ extern(C):
 * ---
 */
 void* allocate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	registers[pc.out_] = cast(size_t) malloc(hostSize(registers[pc.a]));
-	mixin(mizuNext);
+	registers[pc.out_] = cast(size_t) fp.pointer.allocator(null, hostSize(registers[pc.a]));
+	mixin(nextInstruction);
 }
 
 /**
@@ -76,9 +75,9 @@ void* allocate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 * ---
 */
 void* freeAllocated(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	free(cast(void*) registers[pc.a]);
+	cast(void) fp.pointer.allocator(cast(void*) registers[pc.a], 0);
 	registers[pc.a] = registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -109,8 +108,8 @@ void* freeAllocated(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 void* allocateFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	bool overflow;
 	immutable bytes = core.checkedint.mulu(registers[pc.a], registers[pc.b], overflow);
-	registers[pc.out_] = overflow ? 0 : cast(size_t) fp.pointer.malloc!ubyte(hostSize(bytes));
-	mixin(mizuNext);
+	registers[pc.out_] = overflow ? 0 : cast(size_t) fp.pointer.allocate!ubyte(hostSize(bytes));
+	mixin(nextInstruction);
 }
 
 /**
@@ -137,7 +136,7 @@ void* allocateFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 void* freeFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	fp.pointer.free(cast(const(ubyte)*) registers[pc.a]);
 	registers[pc.a] = registers[pc.b];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -163,7 +162,7 @@ void* freeFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 void* pointerToStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(size_t)(sp + offset);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -189,7 +188,7 @@ void* pointerToStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 void* pointerToStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(size_t)(env.stackBottom - offset);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -213,7 +212,7 @@ void* pointerToStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* pointerToRegister(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = cast(size_t)(registers + pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -241,8 +240,8 @@ void* pointerToRegister(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* copyMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memcpy(cast(void*) registers[pc.out_], cast(const(void)*) registers[pc.a], cast(size_t) registers[pc.b]);
-	mixin(mizuNext);
+	fp.pointer.copy((cast(ubyte*) registers[pc.out_])[0 .. cast(size_t) registers[pc.b]], (cast(const(ubyte)*) registers[pc.a])[0 .. cast(size_t) registers[pc.b]]);
+	mixin(nextInstruction);
 }
 
 /**
@@ -269,8 +268,8 @@ void* copyMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* copyMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memcpy(cast(void*) registers[pc.out_], cast(const(void)*) registers[pc.a], pc.b);
-	mixin(mizuNext);
+	fp.pointer.copy((cast(ubyte*) registers[pc.out_])[0 .. pc.b], (cast(const(ubyte)*) registers[pc.a])[0 .. pc.b]);
+	mixin(nextInstruction);
 }
 
 /**
@@ -297,8 +296,8 @@ void* copyMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 * ---
 */
 void* setMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memset(cast(void*) registers[pc.out_], cast(int) registers[pc.a], cast(size_t) registers[pc.b]);
-	mixin(mizuNext);
+	fp.pointer.fill((cast(ubyte*) registers[pc.out_])[0 .. cast(size_t) registers[pc.b]], cast(ubyte) registers[pc.a]);
+	mixin(nextInstruction);
 }
 
 /**
@@ -324,8 +323,8 @@ void* setMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* setMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	memset(cast(void*) registers[pc.out_], cast(int) registers[pc.a], pc.b);
-	mixin(mizuNext);
+	fp.pointer.fill((cast(ubyte*) registers[pc.out_])[0 .. pc.b], cast(ubyte) registers[pc.a]);
+	mixin(nextInstruction);
 }
 
 /**
@@ -349,10 +348,9 @@ void* setMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* printString(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	immutable printed = fputs(cast(const(char)*) registers[pc.a], stdout) >= 0 && fputs("\n", stdout) >= 0;
-	immutable flushed = fflush(stdout) == 0;
-	registers[pc.out_] = printed && flushed ? 0 : -1;
-	mixin(mizuNext);
+	immutable printed = fp.io.writeAll(fp.io.Console.output, fp.string.sliceTerminated(cast(const(char)*) registers[pc.a])) && fp.io.writeAll(fp.io.Console.output, "\n");
+	registers[pc.out_] = printed ? 0 : -1;
+	mixin(nextInstruction);
 }
 
 /**
@@ -380,7 +378,7 @@ void* printString(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* pointerLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ulong*) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -407,7 +405,7 @@ void* pointerLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* pointerStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ulong*) registers[pc.b] = registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -433,7 +431,7 @@ void* pointerStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* pointerLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(uint*) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -460,7 +458,7 @@ void* pointerLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* pointerStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(uint*) registers[pc.b] = cast(uint) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -486,7 +484,7 @@ void* pointerStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* pointerLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ushort*) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -513,7 +511,7 @@ void* pointerLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* pointerStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ushort*) registers[pc.b] = cast(ushort) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -539,7 +537,7 @@ void* pointerStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* pointerLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ubyte*) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -566,5 +564,5 @@ void* pointerLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* pointerStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = *cast(ubyte*) registers[pc.b] = cast(ubyte) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

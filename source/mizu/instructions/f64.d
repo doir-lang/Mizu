@@ -5,7 +5,7 @@
 */
 module mizu.instructions.f64;
 
-import core.stdc.math : sqrt;
+static import core.math;
 
 import mizu.opcode;
 static import mizu.instructions.f32;
@@ -34,7 +34,7 @@ static import mizu.instructions.f32;
 */
 void* convertF32ToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = mizu.instructions.f32.floatRegister!float(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -59,7 +59,7 @@ void* convertF32ToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* convertF64ToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!float(registers, pc.out_) = cast(float) mizu.instructions.f32.floatRegister!double(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -84,7 +84,7 @@ void* convertF64ToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 */
 void* convertToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = cast(double) registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -109,7 +109,7 @@ void* convertToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* convertSignedToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = cast(double)*cast(long*)&registers[pc.a];
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -134,7 +134,7 @@ void* convertSignedToF64(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 */
 void* convertFromF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = cast(ulong) mizu.instructions.f32.floatRegister!double(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -159,7 +159,7 @@ void* convertFromF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 */
 void* convertSignedFromF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	*cast(long*)&registers[pc.out_] = cast(long) mizu.instructions.f32.floatRegister!double(registers, pc.a);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -186,7 +186,7 @@ void* convertSignedFromF64(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* addF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = mizu.instructions.f32.floatRegister!double(registers, pc.a) + mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -213,7 +213,7 @@ void* addF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 */
 void* subtractF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = mizu.instructions.f32.floatRegister!double(registers, pc.a) - mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -240,7 +240,7 @@ void* subtractF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* multiplyF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = mizu.instructions.f32.floatRegister!double(registers, pc.a) * mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -267,7 +267,7 @@ void* multiplyF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 */
 void* divideF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = mizu.instructions.f32.floatRegister!double(registers, pc.a) / mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -296,7 +296,7 @@ void* maxF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable x = mizu.instructions.f32.floatRegister!double(registers, pc.a);
 	immutable y = mizu.instructions.f32.floatRegister!double(registers, pc.b);
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = x < y ? y : x;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -325,7 +325,7 @@ void* minF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	immutable x = mizu.instructions.f32.floatRegister!double(registers, pc.a);
 	immutable y = mizu.instructions.f32.floatRegister!double(registers, pc.b);
 	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = y < x ? y : x;
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -349,8 +349,8 @@ void* minF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* squareRootF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = sqrt(mizu.instructions.f32.floatRegister!double(registers, pc.a));
-	mixin(mizuNext);
+	mizu.instructions.f32.floatRegister!double(registers, pc.out_) = core.math.sqrt(mizu.instructions.f32.floatRegister!double(registers, pc.a));
+	mixin(nextInstruction);
 }
 
 /**
@@ -377,7 +377,7 @@ void* squareRootF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* setIfEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatRegister!double(registers, pc.a) == mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -404,7 +404,7 @@ void* setIfEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 */
 void* setIfNotEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatRegister!double(registers, pc.a) != mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -431,7 +431,7 @@ void* setIfNotEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfLessF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatRegister!double(registers, pc.a) < mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -458,7 +458,7 @@ void* setIfLessF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 */
 void* setIfGreaterEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatRegister!double(registers, pc.a) >= mizu.instructions.f32.floatRegister!double(registers, pc.b);
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -483,7 +483,7 @@ void* setIfGreaterEqualF64(Opcode* pc, ulong* registers, RegistersAndStack* env,
 */
 void* setIfNegativeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatSignBit(mizu.instructions.f32.floatRegister!double(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -508,7 +508,7 @@ void* setIfNegativeF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfPositiveF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = !mizu.instructions.f32.floatSignBit(mizu.instructions.f32.floatRegister!double(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -533,7 +533,7 @@ void* setIfPositiveF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfInfiniteF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatIsInfinite(mizu.instructions.f32.floatRegister!double(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }
 
 /**
@@ -558,5 +558,5 @@ void* setIfInfiniteF64(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 */
 void* setIfNanF64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 	registers[pc.out_] = mizu.instructions.f32.floatIsNan(mizu.instructions.f32.floatRegister!double(registers, pc.a));
-	mixin(mizuNext);
+	mixin(nextInstruction);
 }

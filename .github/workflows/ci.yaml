@@ -88,6 +88,12 @@ jobs:
           done
         shell: bash
 
+      - name: Check documentation examples
+        run: python3 tools/doctest.py
+
+      - name: Lint layering, naming and wrappers
+        run: python3 tools/lint.py
+
       # The coverage build is plain D, not -betterC, so it catches code only one of the two accepts.
       - name: Measure coverage
         if: runner.os == 'Linux'
