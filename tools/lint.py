@@ -11,9 +11,15 @@ Tags:
 - `LAYER-Pushed`: a pattern a lower library replaced.
 - `E-Remap`: a hand-written `remap[` lookup outside libECRS.
 - `ECRS-Write`: a write through a component pointer from a read accessor; use `getForWriting`, `findForWriting` or `setComponent`.
+- `FN-Length`: a function outside the tests whose body is longer than `CONFIG['max_function_lines']`, in a file `CONFIG['any_length']` does not match; let the caller branch and move the straight-line parts into helpers.
+- `REC-Bound`: a function that calls itself (a call another overload in the file could take does not count) without `// bounded: <the bound>` on the line above its documentation comment.
+- `CMT-Sentence`: a comment line, of any kind, holding more than one sentence; put each on its own line.
+- `CMT-Wrap`: a sentence hard-wrapped onto the next line of its comment; editors here soft-wrap.
 - `DUP-Across` (report-only, with `--across`): a function body identical to one in another repository.
 
-Usage: python3 tools/lint.py [--across dir...] [file.d...]   (default sources: CONFIG['sources']; exits 1 on any finding but DUP-Across)
+`--report` prints, for information, how many asserts each module has per function outside its tests.
+
+Usage: python3 tools/lint.py [--report] [--across dir...] [file.d...]   (default sources: CONFIG['sources']; exits 1 on any finding but DUP-Across)
 """
 import collections
 import fnmatch
@@ -31,6 +37,9 @@ CONFIG = {
 	'platform': ['source/mizu/ffi/*.d'],
 	'remap_allowed': False,
 	'check_ecrs_writes': False,
+	'max_function_lines': 70,
+	# Files whose functions may be any length: generated code, and example or benchmark programs read top to bottom.
+	'any_length': [],
 	'exempt': {
 		'hand-written-shared-cast': [],
 		'posix-yield': [],
@@ -69,6 +78,7 @@ PUSHED = [
 	('hand-written-line-break', r'==\s+\|\|\s*\(\s*[\w.]+\[[^\]]+\]\s*==\s+&&\s*\(', 'line break (\\n, \\r\\n or lone \\r) tested by hand', 'use fp.string.breaksLine, lineOf, lineStart or lineEnd'),
 	('hand-written-trim', r'while\s*\(\s*([\w.]+)\.length\s*&&\s*\(\s*\1\[\s*(0|\$\s*-\s*1)\s*\]\s*==', 'leading or trailing characters trimmed by hand', 'use fp.string.trim, trimStart or trimEnd'),
 	('renamed-fp-file', r'\bfp\.file\b', 'fp.file, since renamed', 'use fp.io'),
+	('inline-generator', r'\*\s*1103515245\b|\*\s*6364136223846793005\b', 'random numbers from a hand-written generator', 'use fp.algorithms.Random'),
 	('fix-from-hint', r'\bstartsWith\s*\(\s*hint\b', 'quick fix parsed back out of a hint\'s text', 'attach a diagnose.Diagnostic.Fix where the diagnostic is made'),
 ]
 
@@ -141,7 +151,7 @@ def inside(ranges, offset):
 
 # --- functions -------------------------------------------------------------------
 
-Function = collections.namedtuple('Function', 'name start body body_start')
+Function = collections.namedtuple('Function', 'name start body body_start parameters')
 
 
 def functions(code):
@@ -159,7 +169,8 @@ def functions(code):
 			if stripped == header:
 				break
 			header = stripped
-		if '(' not in header or '=' in header.split('(', 1)[0]:
+		# A header that closes a parenthesis it did not open is the tail of a `foreach (i; 0 .. f(x))`, not a function.
+		if '(' not in header or '=' in header.split('(', 1)[0] or header.count(')') != header.count('('):
 			continue
 		first_word = re.match(r'\s*(\w+)', header)
 		if not first_word or first_word.group(1) in CONTROL:
@@ -171,7 +182,7 @@ def functions(code):
 		if close_at is None:
 			continue
 		name_at = code.rfind(found.group('name'), head_start, open_at - len(header.strip()) + header.strip().find(found.group('name')) + len(found.group('name')))
-		yield Function(found.group('name'), name_at, code[open_at + 1:close_at], open_at + 1)
+		yield Function(found.group('name'), name_at, code[open_at + 1:close_at], open_at + 1, found.group('params'))
 
 
 def _top_level(expression):
@@ -203,6 +214,79 @@ def forwards_only(body):
 	return len(re.findall(r'(?<!cast)\b(?!cast\b)\w+\s*(?:!\s*\(?[\w.,\s]*\)?\s*)?\(', expression)) <= 2
 
 
+# --- comments ----------------------------------------------------------------------
+
+ABBREVIATIONS = {'e.g.', 'i.e.', 'cf.', 'vs.', 'al.', 'etc.', 'approx.', 'resp.', 'viz.'}
+
+SENTENCE_END = re.compile(r'[.!?:][*_"\')]*$')
+
+CommentLine = collections.namedtuple('CommentLine', 'line prose own comment')
+
+
+def comment_lines(text):
+	"""Yields a `CommentLine` per line of each comment in `text`: its 1-based line, its text without the comment marker, whether the comment starts its line, and which comment it is part of (`'///'` or `'//'` for a run of line comments, a block's offset)."""
+	pattern = re.compile(r'(//[^\n]*)|(/\*.*?\*/|/\+.*?\+/)|r"[^"]*"|`[^`]*`|q\{.*?\}|"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])+\'', re.S)
+	for match in pattern.finditer(text):
+		if not match.group(1) and not match.group(2):
+			continue
+		first = line_of(text, match.start())
+		own = not text[text.rfind('\n', 0, match.start()) + 1:match.start()].strip()
+		if match.group(1):
+			yield CommentLine(first, re.sub(r'^//+ ?', '', match.group(1)), own, '///' if match.group(1).startswith('///') else '//')
+			continue
+		for k, line in enumerate(match.group(2)[2:-2].split('\n')):
+			yield CommentLine(first + k, re.sub(r'^\s*[*+]+(?=\s|$) ?', '', line) if k else re.sub(r'^[*+]+ ?', '', line), own, match.start())
+
+
+def sentence_breaks(prose):
+	"""The offsets in comment text `prose` where a new sentence starts, skipping code spans, parentheses, ellipses and abbreviations such as `e.g.`; a DDoc macro such as `$(LI …)` is read through."""
+	out, open_brackets, i = [], [], 0
+	while i < len(prose):
+		c = prose[i]
+		if c == '`':
+			ticks = re.match(r'`+', prose[i:]).group(0)
+			end = prose.find(ticks, i + len(ticks))
+			i = end + len(ticks) if end >= 0 else i + len(ticks)
+			continue
+		if c in '([':
+			open_brackets.append('macro' if c == '(' and prose[i - 1:i] == '$' else 'bracket')
+		elif c in ')]':
+			if open_brackets:
+				open_brackets.pop()
+		elif c in '.!?' and 'bracket' not in open_brackets and not (c == '.' and '.' in (prose[i - 1:i], prose[i + 1:i + 2])):
+			start = re.compile(r'[*_"\']*( +)([A-Z`*\[("_\'$])').match(prose, i + 1)
+			word = prose[:i + 1].rsplit(' ', 1)[-1].lstrip('(*_`')
+			if start and word not in ABBREVIATIONS and not re.fullmatch(r'[A-Z]\.|\d+\.', word):
+				out.append(start.start(2))
+		i += 1
+	return out
+
+
+def _starts_part(prose):
+	stripped = prose.strip()
+	return prose[:1] in (' ', '\t') or re.match(r'([-*+]|\d+[.)])\s|\$\(|\)|[A-Z][\w ]*:(\s|$)|Ditto\b|\w+ = ', stripped) is not None
+
+
+def check_comments(path, text):
+	"""Yields a `CMT-Sentence` finding per comment line holding more than one sentence, and a `CMT-Wrap` finding per line whose sentence runs on to the next line of its comment; DDoc `---` examples are code and skipped."""
+	example, last, open_sentence = False, None, None
+	for line in comment_lines(text):
+		continues = last is not None and line.own and line.line == last.line + 1 and line.comment == last.comment
+		last = line
+		prose = line.prose.strip()
+		example = continues and example
+		if prose.startswith('---'):
+			example = not example
+		if example or prose.startswith('---'):
+			open_sentence = None
+			continue
+		if sentence_breaks(prose):
+			yield Finding(path, line.line, 'CMT-Sentence', 'comment line holds more than one sentence', 'put each sentence on its own line')
+		if continues and open_sentence is not None and prose and not _starts_part(line.prose):
+			yield Finding(path, open_sentence, 'CMT-Wrap', 'sentence hard-wrapped onto the next comment line', 'join the lines, since editors here soft-wrap')
+		open_sentence = line.line if line.own and prose and not SENTENCE_END.search(prose) and not re.match(r'(wrapper|bounded):|\)+$|`[^`]*`$', prose) else None
+
+
 # --- checks ------------------------------------------------------------------------
 
 Finding = collections.namedtuple('Finding', 'path line tag message hint')
@@ -224,6 +308,15 @@ def check_names(path, code):
 		yield Finding(path, line_of(code, first), 'NAME-Cryptic', '`%s` is cryptic (%d uses in this file)' % (name, count), 'name it %s' % CRYPTIC[name])
 
 
+def _marked(lines, line, name, marker):
+	above = line - 2
+	while above >= 0 and (lines[above].strip().startswith(('//', '/*', '*')) or lines[above].strip().startswith('pragma(') or re.match(r'\s*template\s+%s\b' % re.escape(name), lines[above])):
+		if lines[above].strip().startswith(marker):
+			return True
+		above -= 1
+	return False
+
+
 def check_wrappers(path, text, code):
 	"""Yields a `WRAP-OneLine` finding for each function outside the tests whose whole body only forwards, unless it is a protocol hook or marked `// wrapper:`."""
 	tests = test_ranges(code)
@@ -236,14 +329,89 @@ def check_wrappers(path, text, code):
 		if target and (target.group(1) == function.name or target.group(1).startswith(function.name[:1].upper() + function.name[1:])):
 			continue
 		line = line_of(code, function.start)
-		above = line - 2
-		marked = False
-		while above >= 0 and (lines[above].strip().startswith(('//', '/*', '*')) or lines[above].strip().startswith('pragma(') or re.match(r'\s*template\s+%s\b' % re.escape(function.name), lines[above])):
-			marked = marked or lines[above].strip().startswith('// wrapper:')
-			above -= 1
-		if marked:
+		if _marked(lines, line, function.name, '// wrapper:'):
 			continue
 		yield Finding(path, line, 'WRAP-OneLine', '`%s` only forwards to another call or field' % function.name, 'inline it, or rename what it wraps so the direct call reads as well; mark one a protocol requires with `// wrapper: <reason>`')
+
+
+def check_length(path, code, config):
+	"""Yields an `FN-Length` finding for each function outside the tests whose body has more lines than `config['max_function_lines']`."""
+	if any(fnmatch.fnmatch(path, pattern) for pattern in config['any_length']):
+		return
+	tests = test_ranges(code)
+	for function in functions(code):
+		length = max(0, function.body.count('\n') - 1)
+		if length > config['max_function_lines'] and not inside(tests, function.start):
+			yield Finding(path, line_of(code, function.start), 'FN-Length', '`%s` is %d lines long, over the limit of %d' % (function.name, length, config['max_function_lines']), 'let it decide the cases and move each straight-line part into a helper defined above it')
+
+
+def _arguments(code, open_at):
+	depth = 0
+	for i in range(open_at, len(code)):
+		if code[i] in '([{':
+			depth += 1
+		elif code[i] in ')]}':
+			depth -= 1
+			if depth == 0:
+				return code[open_at + 1:i]
+	return ''
+
+
+def _split(items):
+	depth = 0
+	parts = ['']
+	for c in items:
+		if c in '([{':
+			depth += 1
+		elif c in ')]}':
+			depth -= 1
+		if c == ',' and depth == 0:
+			parts.append('')
+		else:
+			parts[-1] += c
+	return [part for part in parts if part.strip()]
+
+
+def _takes(function, given):
+	parameters = _split(function.parameters)
+	return '...' in function.parameters or sum(1 for parameter in parameters if '=' not in _top_level(parameter)) <= given <= len(parameters)
+
+
+def _calls_itself(function, overloads):
+	for call in re.finditer(r'(?<![.\w])%s\s*(?:!\s*(?:\w+|\([^()]*\)))?\s*\(' % re.escape(function.name), function.body):
+		given = len(_split(_arguments(function.body, call.end() - 1)))
+		# A call another overload could take is read as a call to that overload.
+		if _takes(function, given) and not any(_takes(other, given) for other in overloads if other.start != function.start):
+			return True
+	return False
+
+
+def check_recursion(path, text, code):
+	"""Yields a `REC-Bound` finding for each function outside the tests that calls itself, by an unqualified call that its parameters fit and no other overload's do, unless marked `// bounded:`."""
+	tests = test_ranges(code)
+	lines = text.split('\n')
+	found = list(functions(code))
+	for function in found:
+		if inside(tests, function.start) or not _calls_itself(function, [other for other in found if other.name == function.name]):
+			continue
+		line = line_of(code, function.start)
+		if not _marked(lines, line, function.name, '// bounded:'):
+			yield Finding(path, line, 'REC-Bound', '`%s` calls itself with no stated bound' % function.name, 'use a worklist, or say what bounds the depth with `// bounded: <the bound>` above its documentation comment')
+
+
+def report(paths, root):
+	"""Prints, per source in `paths` under `root`, the asserts and functions outside its tests, then the totals."""
+	asserts_in_all = functions_in_all = 0
+	for path in paths:
+		with open(os.path.join(root, path), encoding='utf-8') as source:
+			code = strip_code(source.read())
+		tests = test_ranges(code)
+		bodies = [function.body for function in functions(code) if not inside(tests, function.start)]
+		asserts = sum(len(re.findall(r'\bassert\s*\(', body)) for body in bodies)
+		asserts_in_all += asserts
+		functions_in_all += len(bodies)
+		print('%s: %d asserts in %d functions (%.2f each)' % (path, asserts, len(bodies), asserts / max(len(bodies), 1)))
+	print('total: %d asserts in %d functions (%.2f each)' % (asserts_in_all, functions_in_all, asserts_in_all / max(functions_in_all, 1)))
 
 
 def check_layers(path, code, config):
@@ -293,9 +461,12 @@ def lint(path, root, config):
 	findings = []
 	findings.extend(check_names(path, code))
 	findings.extend(check_wrappers(path, text, code))
+	findings.extend(check_length(path, code, config))
+	findings.extend(check_recursion(path, text, code))
 	findings.extend(check_layers(path, code, config))
 	findings.extend(check_remap(path, code, config))
 	findings.extend(check_ecrs_writes(path, code, config))
+	findings.extend(check_comments(path, text))
 	return findings
 
 
@@ -329,6 +500,8 @@ def main():
 	"""Lints the sources named on the command line, or `CONFIG['sources']`, and prints each finding."""
 	root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 	arguments = sys.argv[1:]
+	reporting = '--report' in arguments
+	arguments = [a for a in arguments if a != '--report']
 	across = []
 	while '--across' in arguments:
 		at = arguments.index('--across')
@@ -338,6 +511,8 @@ def main():
 	paths = [os.path.relpath(os.path.abspath(a), root) for a in arguments]
 	if not paths:
 		paths = sorted({os.path.relpath(p, root) for pattern in CONFIG['sources'] for p in glob.glob(os.path.join(root, pattern), recursive=True)})
+	if reporting:
+		report(paths, root)
 	failed = False
 	for path in paths:
 		for finding in lint(path, root, CONFIG):

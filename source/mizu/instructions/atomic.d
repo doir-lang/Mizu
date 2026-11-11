@@ -1,7 +1,9 @@
 /**
 * Atomic instructions on 64 bit values, held either in registers or in memory a register points at.
 *
-* `a` names the register to update, `b` the register holding the operand, and `out_` receives the value `a` held before the instruction. Each instruction has a `Pointer` twin that instead updates the memory `a` points at, which is how threads forked by `mizu.instructions.parallel`, each with its own copy of the registers, share a value. Every access is sequentially consistent.
+* `a` names the register to update, `b` the register holding the operand, and `out_` receives the value `a` held before the instruction.
+* Each instruction has a `Pointer` twin that instead updates the memory `a` points at, which is how threads forked by `mizu.instructions.parallel`, each with its own copy of the registers, share a value.
+* Every access is sequentially consistent.
 *
 * Like `mizu.instructions.unsafe`'s pointer instructions, the `Pointer` twins check nothing beyond alignment: the address may be a host allocation from `allocate`, anywhere on Mizu's stack, or a register from `pointerToRegister`.
 */
@@ -20,6 +22,7 @@ private shared(ulong)* cell(ulong* registers, size_t index) {
 
 // The memory register `index` points at, asserted to be aligned as an atomic access requires.
 private shared(ulong)* pointee(ulong* registers, size_t index) {
+	assert(index < mizu.opcode.registerCount, "mizu: an atomic address register past registerCount");
 	immutable address = registers[index];
 	assert(address % ulong.sizeof == 0, "mizu: atomic access to a misaligned address");
 	return cast(shared(ulong)*) address;
@@ -72,6 +75,7 @@ void* atomicFence(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* atomicLoad(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicLoad(*cell(registers, pc.a));
 	mixin(nextInstruction);
 }
@@ -98,6 +102,7 @@ void* atomicLoad(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* atomicStore(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	immutable value = registers[pc.b];
 	core.atomic.atomicStore(*cell(registers, pc.a), value);
 	registers[pc.out_] = value;
@@ -128,6 +133,7 @@ void* atomicStore(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* atomicExchange(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicExchange(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -135,7 +141,8 @@ void* atomicExchange(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 /**
 * Atomically overwrites a register with another's value, but only if it holds the value expected.
 *
-* Like RISC-V's `amocas.d`, `out_` is read as well as written: it holds the expected value going in and the value `a` held coming out. The store happened exactly when the two are equal, so keep a copy of the expected value to compare against.
+* Like RISC-V's `amocas.d`, `out_` is read as well as written: it holds the expected value going in and the value `a` held coming out.
+* The store happened exactly when the two are equal, so keep a copy of the expected value to compare against.
 *
 * Params:
 *   out_ = register holding the expected value, overwritten with the value `a` held before
@@ -161,6 +168,7 @@ void* atomicExchange(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicCompareExchange(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	ulong expected = registers[pc.out_];
 	cast(void) core.atomic.cas(cell(registers, pc.a), &expected, registers[pc.b]);
 	registers[pc.out_] = expected;
@@ -191,6 +199,7 @@ void* atomicCompareExchange(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	// `core.atomic.atomicFetchAdd` takes a `size_t`, too narrow on 32 bit targets; wrapping arithmetic recovers the old value from the new.
 	registers[pc.out_] = core.atomic.atomicOp!"+="(*cell(registers, pc.a), registers[pc.b]) - registers[pc.b];
 	mixin(nextInstruction);
@@ -220,6 +229,7 @@ void* atomicFetchAdd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchSubtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicOp!"-="(*cell(registers, pc.a), registers[pc.b]) + registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -248,6 +258,7 @@ void* atomicFetchSubtract(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 * ---
 */
 void* atomicFetchAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x & y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -276,6 +287,7 @@ void* atomicFetchAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x | y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -304,6 +316,7 @@ void* atomicFetchOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* atomicFetchXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x ^ y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -332,6 +345,7 @@ void* atomicFetchXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchMin(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x < y ? x : y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -360,6 +374,7 @@ void* atomicFetchMin(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchMax(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x > y ? x : y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -388,6 +403,7 @@ void* atomicFetchMax(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* atomicFetchMinSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x < cast(long) y ? x : y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -416,6 +432,7 @@ void* atomicFetchMinSigned(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* atomicFetchMaxSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x > cast(long) y ? x : y)(cell(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -442,6 +459,7 @@ void* atomicFetchMaxSigned(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* atomicLoadPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicLoad(*pointee(registers, pc.a));
 	mixin(nextInstruction);
 }
@@ -469,6 +487,7 @@ void* atomicLoadPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* atomicStorePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	immutable value = registers[pc.b];
 	core.atomic.atomicStore(*pointee(registers, pc.a), value);
 	registers[pc.out_] = value;
@@ -500,6 +519,7 @@ void* atomicStorePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* atomicExchangePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicExchange(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -534,6 +554,7 @@ void* atomicExchangePointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicCompareExchangePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	ulong expected = registers[pc.out_];
 	cast(void) core.atomic.cas(pointee(registers, pc.a), &expected, registers[pc.b]);
 	registers[pc.out_] = expected;
@@ -565,6 +586,7 @@ void* atomicCompareExchangePointer(Opcode* pc, ulong* registers, RegistersAndSta
 * ---
 */
 void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicOp!"+="(*pointee(registers, pc.a), registers[pc.b]) - registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -594,6 +616,7 @@ void* atomicFetchAddPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchSubtractPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = core.atomic.atomicOp!"-="(*pointee(registers, pc.a), registers[pc.b]) + registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -623,6 +646,7 @@ void* atomicFetchSubtractPointer(Opcode* pc, ulong* registers, RegistersAndStack
 * ---
 */
 void* atomicFetchAndPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x & y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -652,6 +676,7 @@ void* atomicFetchAndPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchOrPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x | y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -681,6 +706,7 @@ void* atomicFetchOrPointer(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* atomicFetchXorPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x ^ y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -710,6 +736,7 @@ void* atomicFetchXorPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchMinPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x < y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -739,6 +766,7 @@ void* atomicFetchMinPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchMaxPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => x > y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -768,6 +796,7 @@ void* atomicFetchMaxPointer(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* atomicFetchMinSignedPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x < cast(long) y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }
@@ -797,6 +826,7 @@ void* atomicFetchMinSignedPointer(Opcode* pc, ulong* registers, RegistersAndStac
 * ---
 */
 void* atomicFetchMaxSignedPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = fetchCombine!((x, y) => cast(long) x > cast(long) y ? x : y)(pointee(registers, pc.a), registers[pc.b]);
 	mixin(nextInstruction);
 }

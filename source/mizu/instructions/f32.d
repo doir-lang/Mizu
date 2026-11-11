@@ -1,7 +1,8 @@
 /**
 * 32 bit floating point instructions.
 *
-* Mizu registers are raw 64 bit blobs, so a "float register" is just a register whose bits are being read as an `f32`. Convert with `convertToF32`/`convertFromF32` before and after doing float math on a value that arrived as an integer.
+* Mizu registers are raw 64 bit blobs, so a "float register" is just a register whose bits are being read as an `f32`.
+* Convert with `convertToF32`/`convertFromF32` before and after doing float math on a value that arrived as an integer.
 *
 * An `f32` lives in a register's low 32 bits, and an instruction writing one leaves the upper 32 bits as they were.
 */
@@ -25,6 +26,7 @@ import mizu.opcode;
 * ---
 */
 ref F floatRegister(F)(ulong* registers, Register index) @trusted if (is(F == float) || is(F == double)) {
+	assert(index < registerCount, "mizu: a register index past registerCount");
 	return *cast(F*)&registers[index];
 }
 
@@ -107,6 +109,7 @@ extern(C):
 * ---
 */
 void* convertToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	floatRegister!float(registers, pc.out_) = cast(float) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -132,6 +135,7 @@ void* convertToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* convertSignedToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	floatRegister!float(registers, pc.out_) = cast(float)*cast(long*)&registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -157,6 +161,7 @@ void* convertSignedToF32(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* convertFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = cast(ulong) floatRegister!float(registers, pc.a);
 	mixin(nextInstruction);
 }
@@ -182,6 +187,7 @@ void* convertFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* convertSignedFromF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	*cast(long*)&registers[pc.out_] = cast(long) floatRegister!float(registers, pc.a);
 	mixin(nextInstruction);
 }
@@ -400,6 +406,7 @@ void* squareRootF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* setIfEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatRegister!float(registers, pc.a) == floatRegister!float(registers, pc.b);
 	mixin(nextInstruction);
 }
@@ -427,6 +434,7 @@ void* setIfEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* setIfNotEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatRegister!float(registers, pc.a) != floatRegister!float(registers, pc.b);
 	mixin(nextInstruction);
 }
@@ -454,6 +462,7 @@ void* setIfNotEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* setIfLessF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatRegister!float(registers, pc.a) < floatRegister!float(registers, pc.b);
 	mixin(nextInstruction);
 }
@@ -481,6 +490,7 @@ void* setIfLessF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* setIfGreaterEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatRegister!float(registers, pc.a) >= floatRegister!float(registers, pc.b);
 	mixin(nextInstruction);
 }
@@ -506,6 +516,7 @@ void* setIfGreaterEqualF32(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* setIfNegativeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatSignBit(floatRegister!float(registers, pc.a));
 	mixin(nextInstruction);
 }
@@ -531,6 +542,7 @@ void* setIfNegativeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = !floatSignBit(floatRegister!float(registers, pc.a));
 	mixin(nextInstruction);
 }
@@ -556,6 +568,7 @@ void* setIfPositiveF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* setIfInfiniteF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatIsInfinite(floatRegister!float(registers, pc.a));
 	mixin(nextInstruction);
 }
@@ -581,6 +594,7 @@ void* setIfInfiniteF32(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* setIfNanF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = floatIsNan(floatRegister!float(registers, pc.a));
 	mixin(nextInstruction);
 }

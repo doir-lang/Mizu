@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Builds the unittests for wasm32-wasi with threads and runs them in a browser, or headlessly under Node, through @bjorn3/browser_wasi_shim's WASI and @emnapi/wasi-threads.
 
-Threads need atomics and a shared memory, so the build targets wasip1-threads unless --single-threaded asks for plain wasip1, which tests the coroutine scheduler instead. It asks `dub describe` for the sources and import paths, compiling bc-threads and libfp in alongside. Mizu dispatches by tail call, so the build is optimized and targets wasm's tail-call feature, which every current browser and Node support. The build links against a wasi-sdk sysroot and compiler-rt builtins, downloaded once into bin/wasi-sdk unless WASI_SYSROOT and WASI_BUILTINS name local copies. It links with `wasm-ld` from PATH (or WASM_LD), falling back to LDC's internal linker.
+Threads need atomics and a shared memory, so the build targets wasip1-threads unless --single-threaded asks for plain wasip1, which tests the coroutine scheduler instead.
+It asks `dub describe` for the sources and import paths, compiling bc-threads and libfp in alongside.
+Mizu dispatches by tail call, so the build is optimized and targets wasm's tail-call feature, which every current browser and Node support.
+The build links against a wasi-sdk sysroot and compiler-rt builtins, downloaded once into bin/wasi-sdk unless WASI_SYSROOT and WASI_BUILTINS name local copies.
+It links with `wasm-ld` from PATH (or WASM_LD), falling back to LDC's internal linker.
 
 Usage:
   tools/wasi.py                      build bin/wasi/mizu-tests.wasm and the page that runs it

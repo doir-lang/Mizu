@@ -1,9 +1,11 @@
 /**
 * Instructions that check whether `mizu.instructions.core`'s integer operations would overflow, without performing them.
 *
-* Each sets `out_` to one if the matching core instruction, given the same `a` and `b`, would produce a result that does not fit in 64 bits, and to zero otherwise, so the result can feed a branch. The `Signed` variants treat both operands as two's complement.
+* Each sets `out_` to one if the matching core instruction, given the same `a` and `b`, would produce a result that does not fit in 64 bits, and to zero otherwise, so the result can feed a branch.
+* The `Signed` variants treat both operands as two's complement.
 *
-* Unsigned `divide` and `remainder` cannot overflow; check `b` against zero with `setIfEqual` instead. Right shifts discard bits by design, so they have no check either.
+* Unsigned `divide` and `remainder` cannot overflow; check `b` against zero with `setIfEqual` instead.
+* Right shifts discard bits by design, so they have no check either.
 */
 module mizu.instructions.overflow;
 
@@ -38,6 +40,7 @@ import mizu.opcode;
 * ---
 */
 void* addWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.addu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -69,6 +72,7 @@ void* addWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* addWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.adds(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -100,6 +104,7 @@ void* addWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* en
 * ---
 */
 void* subtractWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.subu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -131,6 +136,7 @@ void* subtractWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* subtractWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.subs(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -162,6 +168,7 @@ void* subtractWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStac
 * ---
 */
 void* multiplyWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.mulu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -193,6 +200,7 @@ void* multiplyWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* multiplyWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow = false;
 	cast(void) core.checkedint.muls(cast(long) registers[pc.a], cast(long) registers[pc.b], overflow);
 	registers[pc.out_] = overflow;
@@ -227,6 +235,7 @@ void* multiplyWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStac
 * ---
 */
 void* shiftLeftWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	immutable value = registers[pc.a], amount = registers[pc.b];
 	// D leaves a shift by the full width or more undefined, so it never reaches `<<`.
 	registers[pc.out_] = amount >= 64 ? value != 0 : (value << amount) >> amount != value;
@@ -261,6 +270,7 @@ void* shiftLeftWouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* en
 * ---
 */
 void* shiftLeftWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	immutable value = cast(long) registers[pc.a], amount = registers[pc.b];
 	// Shifting back arithmetically restores `value` exactly when no bit, sign included, was lost.
 	registers[pc.out_] = amount >= 64 ? value != 0 : (value << amount) >> amount != value;
@@ -290,6 +300,7 @@ void* shiftLeftWouldOverflowSigned(Opcode* pc, ulong* registers, RegistersAndSta
 * ---
 */
 void* convertToU32WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] > uint.max;
 	mixin(nextInstruction);
 }
@@ -317,6 +328,7 @@ void* convertToU32WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack*
 * ---
 */
 void* convertToU16WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] > ushort.max;
 	mixin(nextInstruction);
 }
@@ -344,6 +356,7 @@ void* convertToU16WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack*
 * ---
 */
 void* convertToU8WouldOverflow(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] > ubyte.max;
 	mixin(nextInstruction);
 }

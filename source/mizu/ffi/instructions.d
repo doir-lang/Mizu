@@ -1,9 +1,11 @@
 /**
 * Foreign function interface instructions: Mizu calls a host function the same way it calls one of its own, substituting `call` for `jumpTo`.
 *
-* Describing a signature takes two steps: push the return type and then each argument type onto a per-thread type stack, then `createInterface` turns that stack into a reusable interface handle. `call`/`callWithReturn` read the arguments out of the argument registers (`a0`, `a1`, ...).
+* Describing a signature takes two steps: push the return type and then each argument type onto a per-thread type stack, then `createInterface` turns that stack into a reusable interface handle.
+* `call`/`callWithReturn` read the arguments out of the argument registers (`a0`, `a1`, ...).
 *
-* Note: calls go through libffi, or with `MizuFFITrampolines` (implied on WASM) through the compile-time trampolines of `mizu.ffi.trampoline`, which take at most `mizu.config.maximumTrampolineArguments` arguments. With `MizuNoLibFFI` set and no trampolines the type-stack instructions still work, but `createInterface` and the two `call` instructions abort.
+* Note: calls go through libffi, or with `MizuFFITrampolines` (implied on WASM) through the compile-time trampolines of `mizu.ffi.trampoline`, which take at most `mizu.config.maximumTrampolineArguments` arguments.
+* With `MizuNoLibFFI` set and no trampolines the type-stack instructions still work, but `createInterface` and the two `call` instructions abort.
 */
 module mizu.ffi.instructions;
 
@@ -39,7 +41,8 @@ static if (mizu.config.ffiTrampolines) {
 }
 
 /**
-* Releases this thread's type stack, which `clearTypeStack` only empties. `mizu.instructions.parallel` calls this as each forked thread finishes; the main thread's stack is released by the process exiting.
+* Releases this thread's type stack, which `clearTypeStack` only empties.
+* `mizu.instructions.parallel` calls this as each forked thread finishes; the main thread's stack is released by the process exiting.
 *
 * Examples:
 * ---
@@ -55,6 +58,8 @@ package(mizu) void releaseTypeStack() {
 
 // Shared body of `call` and `callWithReturn`; `hasReturn` stores the result in `out_`.
 private void* callImpl(bool hasReturn)(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	static if (hasReturn) assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
+	else assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	static if (mizu.config.ffiTrampolines) {
 		auto trampoline = cast(mizu.ffi.trampoline.Trampoline) registers[pc.b];
 		if (trampoline is null) mizu.error.fatal("FFI Interface does not exist!");
@@ -85,17 +90,23 @@ private void* callImpl(bool hasReturn)(Opcode* pc, ulong* registers, RegistersAn
 // Pushes one type onto the current type stack, named as libffi and `mizu.ffi.trampoline.Kind` name it, aborting if it cannot grow.
 private void pushType(string typeName, string kindName)() {
 	static if (mizu.config.ffiTrampolines) {
+		immutable before = fp.dynarray.length(currentKinds);
 		if (!fp.dynarray.pushBack(currentKinds, mixin("mizu.ffi.trampoline.Kind." ~ kindName)))
 			mizu.error.fatal("Failed to grow the FFI type stack.");
-	} else static if (!mizu.config.noLibFFI)
+		assert(fp.dynarray.length(currentKinds) == before + 1, "mizu.ffi: a type push that did not add one type");
+	} else static if (!mizu.config.noLibFFI) {
+		immutable before = fp.dynarray.length(currentTypes);
 		if (!fp.dynarray.pushBack(currentTypes, &mixin("mizu.ffi.libffi.ffi_type_" ~ typeName)))
 			mizu.error.fatal("Failed to grow the FFI type stack.");
+		assert(fp.dynarray.length(currentTypes) == before + 1 && *fp.dynarray.back(currentTypes) is &mixin("mizu.ffi.libffi.ffi_type_" ~ typeName), "mizu.ffi: a type push that did not add its type");
+	}
 }
 
 extern(C):
 
 /**
-* Pushes `void` (meaningful only as the return type) onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `void` (meaningful only as the return type) onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -123,7 +134,8 @@ void* pushTypeVoid(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 }
 
 /**
-* Pushes `void*` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `void*` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -150,7 +162,8 @@ void* pushTypePointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 }
 
 /**
-* Pushes `int32_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `int32_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -177,7 +190,8 @@ void* pushTypeI32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Pushes `uint32_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `uint32_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -204,7 +218,8 @@ void* pushTypeU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Pushes `int64_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `int64_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -231,7 +246,8 @@ void* pushTypeI64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Pushes `uint64_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `uint64_t` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -258,7 +274,8 @@ void* pushTypeU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Pushes `float` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `float` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -285,7 +302,8 @@ void* pushTypeF32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Pushes `double` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters. Failing to grow the stack is fatal.
+* Pushes `double` onto this thread's FFI type stack, which `createInterface` turns into a signature: the first type pushed is the return type, the rest the parameters.
+* Failing to grow the stack is fatal.
 *
 * Examples:
 * ---
@@ -342,7 +360,8 @@ void* clearTypeStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 }
 
 /**
-* Converts this thread's type stack into an interface describing a function's signature, leaving this thread's stack empty. An empty stack, or one the backend rejects, is fatal: libffi's own checks, or for trampolines a `void` argument or more than `mizu.config.maximumTrampolineArguments` arguments.
+* Converts this thread's type stack into an interface describing a function's signature, leaving this thread's stack empty.
+* An empty stack, or one the backend rejects, is fatal: libffi's own checks, or for trampolines a `void` argument or more than `mizu.config.maximumTrampolineArguments` arguments.
 *
 * The first type on the stack is the return type and everything after it is a parameter; use `pushTypeVoid` for a function that returns nothing.
 *
@@ -369,6 +388,7 @@ void* clearTypeStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	static if (mizu.config.ffiTrampolines) {
 		immutable count = fp.pointer.length(currentKinds);
 		if (count == 0)
@@ -377,6 +397,7 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 		if (trampoline is null)
 			mizu.error.fatal("No FFI trampoline for a void argument, or for more arguments than ", mizu.config.maximumTrampolineArguments);
 		fp.dynarray.clear(currentKinds);
+		assert(fp.dynarray.length(currentKinds) == 0, "mizu.ffi: a type stack left after making its interface");
 		registers[pc.out_] = cast(size_t) trampoline;
 	} else static if (mizu.config.noLibFFI)
 		mizu.error.fatal("This build of Mizu has no FFI backend (MizuNoLibFFI).");
@@ -396,6 +417,7 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 
 		// The interface owns the type array now, so start a fresh stack rather than clearing it.
 		currentTypes = null;
+		assert(iface.argumentCount + 1 == fp.dynarray.length(iface.types), "mizu.ffi: an interface whose arguments disagree with its types");
 		registers[pc.out_] = cast(size_t) iface;
 	}
 	mixin(nextInstruction);
@@ -423,6 +445,7 @@ void* createInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* freeInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	static if (mizu.config.ffiTrampolines) {
 		if (registers[pc.a] == 0) mizu.error.fatal("FFI Interface does not exist!");
 	} else static if (!mizu.config.noLibFFI) {
@@ -437,7 +460,8 @@ void* freeInterface(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 
 // wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
-* Calls a foreign function, discarding its result. The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
+* Calls a foreign function, discarding its result.
+* The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
 *
 * Params:
 *   a = register holding a pointer to the function to call
@@ -469,7 +493,8 @@ void* call(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 
 // wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
 /**
-* Calls a foreign function and keeps its result. The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
+* Calls a foreign function and keeps its result.
+* The function's arguments are read from the argument registers (`a0`, `a1`, ...), as many as the interface describes, at most `argumentCount`; more is fatal.
 *
 * Params:
 *   out_ = register to store the function's return value in
@@ -523,6 +548,7 @@ void* callWithReturn(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* loadLibrary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	auto path = cast(const(char)*) registers[pc.a];
 	auto pathSlice = fp.string.sliceTerminated(path);
 
@@ -556,6 +582,7 @@ void* loadLibrary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* loadFirstFound(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	immutable count = immediate(*pc);
 
 	const(char)[][argumentCount] paths;
@@ -597,6 +624,7 @@ void* loadFirstFound(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* loadLibraryFunction(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	auto library = cast(mizu.ffi.loader.Library*) registers[pc.a];
 	auto name = cast(const(char)*) registers[pc.b];
 	registers[pc.out_] = cast(size_t) mizu.ffi.loader.lookup(name, library);

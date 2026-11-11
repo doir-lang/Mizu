@@ -1,13 +1,18 @@
 /**
 * Maps instructions between their names, their function pointers, and the small integer IDs the serializers write to disk.
 *
-* The C++ original built three `std::unordered_map`s at program startup, each instruction header registering itself from a static initializer. `-betterC` has no static constructors, and needs none: D enumerates the instructions at compile time with `__traits(allMembers)`, so the table is built during compilation and lives in read-only data. Nothing is allocated, nothing runs before `main`, and there is nothing to release.
+* The C++ original built three `std::unordered_map`s at program startup, each instruction header registering itself from a static initializer.
+* `-betterC` has no static constructors, and needs none: D enumerates the instructions at compile time with `__traits(allMembers)`, so the table is built during compilation and lives in read-only data.
+* Nothing is allocated, nothing runs before `main`, and there is nothing to release.
 *
 * An instruction's ID is its index in that table, which makes IDs stable for a given build instead of depending on static initialization order across translation units.
 *
 * $(H3 Names)
 *
-* The table stores fully qualified names: `mizu.instructions.core.add`, not `add`. Two packages may then both declare an `add` without one shadowing the other, and a name alone says where the instruction came from, which is what lets `mizu.portable_format.generateSourceFile` import exactly the modules a program needs. It is also what `__FUNCTION__` expands to, so a table name matches what a traced instruction prints under `MizuEnableTracing`. `lookupId` still accepts a bare name for convenience; see `unqualifiedName` and `moduleOfName` to take a stored name apart.
+* The table stores fully qualified names: `mizu.instructions.core.add`, not `add`.
+* Two packages may then both declare an `add` without one shadowing the other, and a name alone says where the instruction came from, which is what lets `mizu.portable_format.generateSourceFile` import exactly the modules a program needs.
+* It is also what `__FUNCTION__` expands to, so a table name matches what a traced instruction prints under `MizuEnableTracing`.
+* `lookupId` still accepts a bare name for convenience; see `unqualifiedName` and `moduleOfName` to take a stored name apart.
 *
 * $(H3 Adding your own instructions)
 *
@@ -20,11 +25,15 @@
 * alias myLookup = Lookup!(myproject.instructions);
 * ---
 *
-* `myLookup` has the same members as this module's, with your instructions appended after Mizu's, so Mizu's own IDs are untouched and yours start at `myLookup.builtinCount`. Hand it to the serializers to make them resolve both halves: `fromBinary!myLookup(blob)`, `toPortable!myLookup(program)` and so on; every function in `mizu.serialize` and `mizu.portable_format` takes a lookup as its first template argument and defaults to `Lookup!()`.
+* `myLookup` has the same members as this module's, with your instructions appended after Mizu's, so Mizu's own IDs are untouched and yours start at `myLookup.builtinCount`.
+* Hand it to the serializers to make them resolve both halves: `fromBinary!myLookup(blob)`, `toPortable!myLookup(program)` and so on; every function in `mizu.serialize` and `mizu.portable_format` takes a lookup as its first template argument and defaults to `Lookup!()`.
 *
-* This has to be a template rather than a list of extra modules `mizu.lookup` imports: Mizu is usually compiled as its own static library, long before your instructions exist. A template is instantiated in $(I your) compilation instead, where the compiler can see both halves, and the resulting table is still built entirely at compile time.
+* This has to be a template rather than a list of extra modules `mizu.lookup` imports: Mizu is usually compiled as its own static library, long before your instructions exist.
+* A template is instantiated in $(I your) compilation instead, where the compiler can see both halves, and the resulting table is still built entirely at compile time.
 *
-* Warning: IDs still describe one build configuration. Adding, removing or reordering instructions renumbers everything after the change, so a serialized program can only be loaded by a build with the same instruction set. FFI instructions are placed last of Mizu's own so that turning the FFI on or off leaves the core instruction IDs untouched; extra instructions follow them, so a program that uses extras must be loaded by a build that agrees about the FFI as well.
+* Warning: IDs still describe one build configuration.
+* Adding, removing or reordering instructions renumbers everything after the change, so a serialized program can only be loaded by a build with the same instruction set.
+* FFI instructions are placed last of Mizu's own so that turning the FFI on or off leaves the core instruction IDs untouched; extra instructions follow them, so a program that uses extras must be loaded by a build that agrees about the FFI as well.
 */
 module mizu.lookup;
 
@@ -136,7 +145,8 @@ private template totalInstructions(Mods...) {
 /**
 * A lookup table over Mizu's instructions, plus the ones declared by the `Extra` modules.
 *
-* `Lookup!()` is the table this module's own `table`, `lookupId` and friends are aliases for; instantiate it with your instruction modules to extend it. See the module documentation.
+* `Lookup!()` is the table this module's own `table`, `lookupId` and friends are aliases for; instantiate it with your instruction modules to extend it.
+* See the module documentation.
 *
 * Examples:
 * ---
@@ -154,7 +164,8 @@ template Lookup(Extra...) {
 	/// How many instructions the lookup knows about, including `programEnd` in slot zero.
 	enum size_t entryCount = 1 + totalInstructions!allModules;
 
-	/// How many of those are Mizu's own. `Extra`'s IDs start here.
+	/// How many of those are Mizu's own.
+	/// `Extra`'s IDs start here.
 	enum size_t builtinCount = 1 + totalInstructions!builtinModules;
 
 	private Entry[entryCount] buildTable() {
@@ -164,10 +175,12 @@ template Lookup(Extra...) {
 		static foreach (mod; allModules)
 			static foreach (name; instructionsOf!mod)
 				result[i++] = Entry(__traits(fullyQualifiedName, __traits(getMember, mod, name)), &__traits(getMember, mod, name));
+		assert(i == entryCount, "mizu: a lookup table that missed or repeated an instruction");
 		return result;
 	}
 
-	/// Every known instruction, indexed by ID. Built at compile time.
+	/// Every known instruction, indexed by ID.
+	/// Built at compile time.
 	immutable Entry[entryCount] table = buildTable();
 
 	/**
@@ -205,6 +218,7 @@ template Lookup(Extra...) {
 	* ---
 	*/
 	Id lookupId(scope const(char)[] name) {
+		static assert(entryCount < fp.pointer.allocationRefused, "mizu: an instruction id that could read as a sentinel");
 		foreach (id; 0 .. entryCount)
 			if (fp.string.equal(table[id].name, name))
 				return id;
@@ -218,7 +232,8 @@ template Lookup(Extra...) {
 	/**
 	* Finds an instruction's ID by function pointer.
 	*
-	* Returns: the ID, or `fp.pointer.notFound`. A null pointer is `programEnd`, ID zero.
+	* Returns: the ID, or `fp.pointer.notFound`.
+	* A null pointer is `programEnd`, ID zero.
 	*
 	* Examples:
 	* ---
@@ -227,6 +242,7 @@ template Lookup(Extra...) {
 	* ---
 	*/
 	Id lookupId(mizu.opcode.Instruction ptr) {
+		assert(table[0].ptr is null, "mizu: a lookup table whose first entry is not programEnd");
 		foreach (id; 0 .. entryCount)
 			if (table[id].ptr is ptr)
 				return id;
@@ -236,7 +252,8 @@ template Lookup(Extra...) {
 	/**
 	* Looks up an instruction's function pointer by ID.
 	*
-	* Returns: the instruction, or null. Null is also the legitimate answer for ID zero (`programEnd`); use `validId` to tell the two apart.
+	* Returns: the instruction, or null.
+	* Null is also the legitimate answer for ID zero (`programEnd`); use `validId` to tell the two apart.
 	*
 	* Examples:
 	* ---
@@ -246,6 +263,7 @@ template Lookup(Extra...) {
 	*/
 	mizu.opcode.Instruction lookupPointer(Id id) {
 		if (!validId(id)) return null;
+		assert(id == 0 || table[id].ptr !is null, "mizu: an instruction other than programEnd with no function");
 		return table[id].ptr;
 	}
 
@@ -262,6 +280,7 @@ template Lookup(Extra...) {
 	*/
 	string lookupName(Id id) {
 		if (!validId(id)) return null;
+		assert(table[id].name.length > 0, "mizu: an instruction with no name");
 		return table[id].name;
 	}
 
@@ -297,7 +316,8 @@ template Lookup(Extra...) {
 	}
 }
 
-/// The lookup over Mizu's own instructions, which the names below refer to. Extended tables are `Lookup!(yourModule)`; see the module documentation.
+/// The lookup over Mizu's own instructions, which the names below refer to.
+/// Extended tables are `Lookup!(yourModule)`; see the module documentation.
 alias defaultLookup = Lookup!();
 
 /// Ditto `Lookup.table`

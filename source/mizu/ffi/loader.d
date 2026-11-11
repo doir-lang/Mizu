@@ -22,7 +22,8 @@ version(Posix) {
 struct Library;
 
 /**
-* The reason the most recent call failed, or null. Not thread safe.
+* The reason the most recent call failed, or null.
+* Not thread safe.
 *
 * Examples:
 * ---
@@ -33,6 +34,7 @@ struct Library;
 __gshared const(char)* lastError = null;
 
 private void* fail(const(char)* reason) {
+	assert(reason !is null && *reason != 0, "mizu.ffi: a failure with no reason");
 	lastError = reason;
 	return null;
 }
@@ -75,9 +77,11 @@ Library* loadShared(scope const(char)[] path, bool appendPlatformDecorator = fal
 			return cast(Library*) fail("Failed to allocate the library's path.");
 		char* name = cloned.get;
 		scope(exit) fp.string.free(name);
+		assert(name !is null && fp.string.length(name) == path.length, "mizu.ffi: a library path copied to the wrong length");
 
 		if (appendPlatformDecorator && sharedLibraryExtension.length && !fp.string.concatenate(name, sharedLibraryExtension))
 			return cast(Library*) fail("Failed to allocate the library's path.");
+		assert(!appendPlatformDecorator || fp.string.endsWith(name, sharedLibraryExtension), "mizu.ffi: a decorated path without its extension");
 
 		version(Posix) {
 			auto result = dlopen(name, RTLD_LAZY);
@@ -110,6 +114,7 @@ alias loadLibrary = loadShared;
 * ---
 */
 Library* loadFirstFound(scope const(const(char)[])[] paths, bool appendPlatformDecorator = false) {
+	assert(paths.ptr !is null || paths.length == 0, "mizu.ffi: paths with a length but no entries");
 	foreach (path; paths)
 		if (auto library = loadShared(path, appendPlatformDecorator))
 			return library;
@@ -119,7 +124,8 @@ Library* loadFirstFound(scope const(const(char)[])[] paths, bool appendPlatformD
 /**
 * Loads the currently running executable, so `lookup` can find symbols the host application itself exports.
 *
-* Note: on POSIX the host must be linked with `--export-dynamic` for its symbols to be visible. Windows has no `dlopen(null)`, so the executable is loaded by its own path instead, and only the symbols it explicitly exports are visible.
+* Note: on POSIX the host must be linked with `--export-dynamic` for its symbols to be visible.
+* Windows has no `dlopen(null)`, so the executable is loaded by its own path instead, and only the symbols it explicitly exports are visible.
 *
 * Returns: the library, to release with `close`, or null (see `lastError`).
 *
@@ -175,6 +181,7 @@ void* lookup(scope const(char)* name, Library* library = null) @trusted {
 		version(OSX) enum searchEverything = cast(Library*) -2;
 		else enum searchEverything = cast(Library*) null;
 
+		assert(name !is null && *name != 0, "mizu.ffi: looking up a function with no name");
 		cast(void) dlerror(); // Clear any stale error so ours is the only one we can see.
 		auto result = dlsym(library is null ? searchEverything : library, name);
 		if (auto error = dlerror()) return fail(error);
@@ -196,7 +203,8 @@ void* lookup(scope const(char)* name, Library* library = null) @trusted {
 }
 
 /**
-* Closes a library a loader in this module returned. Returns false on failure (see `lastError`).
+* Closes a library a loader in this module returned.
+* Returns false on failure (see `lastError`).
 *
 * Examples:
 * ---
@@ -208,6 +216,7 @@ bool close(Library* library) @trusted {
 	static if (!mizu.config.dynamicLoadingSupported)
 		return cast(bool) fail("Dynamic loading is not supported on this platform.");
 	else version(Posix) {
+		assert(library !is null, "mizu.ffi: closing no library");
 		cast(void) dlerror();
 		cast(void) dlclose(library);
 		if (auto error = dlerror()) { lastError = error; return false; }

@@ -1,7 +1,8 @@
 /**
 * The portable program format: a serialized program, a null opcode acting as a terminator, and then the bytes that should sit at the bottom of the program's stack; everything a runner needs to execute a program it knows nothing else about.
 *
-* Note: the terminator and the scan stride are measured in `SerializationOpcode.sizeof` throughout, matching the data actually in the stream, so a blob written by a 64 bit host loads on a 32 bit one. The C++ original measured them in the host-sized `sizeof(opcode)`.
+* Note: the terminator and the scan stride are measured in `SerializationOpcode.sizeof` throughout, matching the data actually in the stream, so a blob written by a 64 bit host loads on a 32 bit one.
+* The C++ original measured them in the host-sized `sizeof(opcode)`.
 *
 * `generateSourceFile` names instructions in full, `mizu.instructions.core.add` rather than `add`; see `mizu.lookup`.
 */
@@ -64,6 +65,8 @@ ubyte* toPortable(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)
 	mizu.serialize.SerializationOpcode terminator;
 	fp.pointer.copy(result[end .. end + marker], (cast(const(ubyte)*) &terminator)[0 .. marker]);
 	fp.pointer.copy(result[end + marker .. end + marker + data.length], cast(const(ubyte)[]) data);
+	assert(fp.pointer.length(result) == end + marker + data.length, "mizu: a portable program of the wrong length");
+	assert((fp.pointer.length(result) - data.length) % mizu.serialize.SerializationOpcode.sizeof == 0, "mizu: data that does not start on an opcode's boundary");
 	return result;
 }
 
@@ -114,6 +117,7 @@ ubyte* toPortable(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)
 */
 PortableProgram fromPortable(alias L = mizu.lookup.defaultLookup)(const(void)[] binary) @trusted {
 	auto opcodes = cast(const(mizu.serialize.SerializationOpcode)*) binary.ptr;
+	immutable total = binary.length;
 	size_t count = 0;
 
 	while (binary.length >= mizu.serialize.SerializationOpcode.sizeof) {
@@ -126,12 +130,28 @@ PortableProgram fromPortable(alias L = mizu.lookup.defaultLookup)(const(void)[] 
 			break;
 	}
 
+	assert(count * mizu.serialize.SerializationOpcode.sizeof + binary.length == total, "mizu: a portable program split into more than it holds");
 	PortableProgram result;
 	result.program = mizu.serialize.fromBinary!L((cast(const(void)*) opcodes)[0 .. count * mizu.serialize.SerializationOpcode.sizeof]);
 	if (binary.length == 0) return result;
 
 	mizu.opcode.fillStackBottom(result.environment, binary);
 	return result;
+}
+
+// Appends `env`'s memory as rows of twelve hex literals, the body of an array literal.
+// False if an allocation was refused.
+private bool appendMemoryRows(ref char* out_, ref const mizu.opcode.RegistersAndStack env) @trusted {
+	immutable before = fp.string.length(out_);
+	for (size_t i = 0; i < mizu.opcode.memorySize;) {
+		if (!fp.string.concatenate(out_, "\t\t")) return false;
+		for (size_t j = 0; j < 12 && i < mizu.opcode.memorySize; ++j, ++i)
+			if (!fp.string.concatenate(out_, "0x") || !fp.string.numbers.appendHex(out_, env.memory[i]) || !fp.string.concatenate(out_, ", ")) return false;
+		if (!fp.string.concatenate(out_, "\n")) return false;
+	}
+	// Each word is at least `0x0, `, five characters.
+	assert(fp.string.length(out_) - before >= 5 * mizu.opcode.memorySize, "mizu: memory rows shorter than the words they hold");
+	return true;
 }
 
 /**
@@ -211,15 +231,7 @@ char* generateSourceFile(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.
 		~ "\tmizu.RegistersAndStack environment;\n"
 		~ "\tstatic immutable ulong[mizu.memorySize] memory = [\n");
 
-	for (size_t i = 0; i < mizu.opcode.memorySize;) {
-		put("\t\t");
-		for (size_t j = 0; j < 12 && i < mizu.opcode.memorySize; ++j, ++i) {
-			put("0x");
-			if (!failed) failed = !fp.string.numbers.appendHex(out_, env.memory[i]);
-			put(", ");
-		}
-		put("\n");
-	}
+	if (!failed) failed = !appendMemoryRows(out_, env);
 
 	put("\t];\n"
 		~ "\tenvironment.memory.ptr[0 .. mizu.memorySize] = memory[];\n"
@@ -230,6 +242,7 @@ char* generateSourceFile(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.
 		~ "}\n");
 
 	if (failed) fp.string.free(out_);
+	assert(failed == (out_ is null), "mizu: a refused source file that kept its text, or an empty one that was not refused");
 	return out_;
 }
 
