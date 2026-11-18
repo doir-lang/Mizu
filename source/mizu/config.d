@@ -8,12 +8,15 @@
 * ---
 *
 * $(UL
-*   $(LI `MizuNoHardwareThreads`: emulate threads with a round-robin coroutine scheduler instead of using OS threads. Implied wherever bc-threads has no threads, such as wasm built without atomics.)
+*   $(LI `MizuNoHardwareThreads`: emulate threads with a round-robin coroutine scheduler instead of using OS threads.
+*   Implied wherever bc-threads has no threads, such as wasm built without atomics.)
 *   $(LI `MizuEnableTracing`: every instruction prints its name and operands as it runs.)
 *   $(LI `MizuNoFFI`: drop the foreign function interface entirely.)
 *   $(LI `MizuNoLibFFI`: keep the FFI instructions but do not bind libffi; unless `MizuFFITrampolines` gives them a backend, `createInterface` and the calls then abort.)
-*   $(LI `MizuFFITrampolines`: make foreign calls through a trampoline generated at compile time for each signature, rather than libffi, which then is not bound. Implied on WASM, where libffi has no WASI port.)
-*   $(LI `MizuAllowDMD`: let DMD compile these sources, which `mizu.opcode` otherwise refuses, for tools that only analyse them, never for something meant to run. libfp refuses DMD too, so pair it with `FpAllowDMD`.))
+*   $(LI `MizuFFITrampolines`: make foreign calls through a trampoline generated at compile time for each signature, rather than libffi, which then is not bound.
+*   Implied on WASM, where libffi has no WASI port.)
+*   $(LI `MizuAllowDMD`: let DMD compile these sources, which `mizu.opcode` otherwise refuses, for tools that only analyse them, never for something meant to run.
+*   libfp refuses DMD too, so pair it with `FpAllowDMD`.))
 */
 module mizu.config;
 
@@ -24,7 +27,8 @@ static import bc.platform;
 /// Size of a Mizu environment's memory (registers + stack) in kilobytes.
 enum double stackSizeKilobytes = 8.0;
 
-/// How many arguments a foreign call may take when `ffiTrampolines` is set. Each argument more multiplies the trampolines compiled in by four, so 4 makes 2046 of them.
+/// How many arguments a foreign call may take when `ffiTrampolines` is set.
+/// Each argument more multiplies the trampolines compiled in by four, so 4 makes 2046 of them.
 enum size_t maximumTrampolineArguments = 4;
 
 /// How many instructions `findLabel` may scan in either direction when the environment does not know where the program starts and ends.

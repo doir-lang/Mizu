@@ -69,10 +69,12 @@ mizu.opcode.Opcode toOpcode(const SerializationOpcode code) {
 * ---
 */
 void byteswap(ref SerializationOpcode code) {
+	version(assert) immutable before = code;
 	code.op = core.bitop.bswap(code.op);
 	code.out_ = core.bitop.byteswap(code.out_);
 	code.a = core.bitop.byteswap(code.a);
 	code.b = core.bitop.byteswap(code.b);
+	version(assert) assert(core.bitop.bswap(code.op) == before.op && core.bitop.byteswap(code.a) == before.a, "mizu: a byte swap that does not undo itself");
 }
 
 /**
@@ -98,9 +100,12 @@ ubyte* toBinary(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)[]
 	auto ops = cast(SerializationOpcode*) result;
 	foreach (i, ref code; program) {
 		ops[i] = fromOpcode(code);
-		ops[i].op = L.lookupId(code.op);
+		immutable id = L.lookupId(code.op);
+		assert(L.validId(id), "mizu: serializing an instruction the lookup does not know");
+		ops[i].op = id;
 		version(BigEndian) byteswap(ops[i]);
 	}
+	assert(fp.dynarray.length(result) == program.length * SerializationOpcode.sizeof, "mizu: a binary of the wrong length");
 	return result;
 }
 
@@ -110,7 +115,8 @@ ubyte* toBinary(alias L = mizu.lookup.defaultLookup)(const(mizu.opcode.Opcode)[]
 * Params:
 *   L = the lookup that resolves the IDs; pass the same one `toBinary` used
 *   binary = the bytes to deserialize
-* Returns: a libfp dynarray of opcodes, to free with `fp.dynarray.free`; null if allocation fails. An unknown ID becomes a null op.
+* Returns: a libfp dynarray of opcodes, to free with `fp.dynarray.free`; null if allocation fails.
+* An unknown ID becomes a null op.
 *
 * Examples:
 * ---
@@ -133,9 +139,12 @@ mizu.opcode.Opcode* fromBinary(alias L = mizu.lookup.defaultLookup)(const(void)[
 	foreach (i; 0 .. count) {
 		SerializationOpcode code = source[i];
 		version(BigEndian) byteswap(code);
-		code.op = cast(ulong) cast(size_t) L.lookupPointer(cast(mizu.lookup.Id) code.op);
+		// On a 32-bit host a wider ID would truncate onto a known one, so it stays unknown.
+		immutable known = code.op <= mizu.lookup.Id.max;
+		code.op = known ? cast(ulong) cast(size_t) L.lookupPointer(cast(mizu.lookup.Id) code.op) : 0;
 		result[i] = toOpcode(code);
 	}
+	assert(fp.dynarray.length(result) == count, "mizu: decoded the wrong number of opcodes");
 	return result;
 }
 
@@ -181,6 +190,13 @@ unittest {
 	auto restoredEnd = fromBinary(end[0 .. fp.pointer.length(end)]);
 	scope(exit) fp.dynarray.free(restoredEnd);
 	assert(restoredEnd[0].op is null);
+
+	// An ID past 32 bits stays unknown rather than truncating onto `add`'s ID on a 32-bit host.
+	SerializationOpcode[1] wide = [SerializationOpcode((1UL << 32) | mizu.lookup.lookupId(&mizu.instructions.core.add), 3, 2, 1)];
+	version(BigEndian) byteswap(wide[0]);
+	auto restoredWide = fromBinary(wide[]);
+	scope(exit) fp.dynarray.free(restoredWide);
+	assert(restoredWide !is null && restoredWide[0].op is null);
 
 	// An empty program round trips as an empty array.
 	auto none = toBinary(program[0 .. 0]);

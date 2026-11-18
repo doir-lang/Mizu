@@ -81,9 +81,11 @@ void* label(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 *   out_ = register to store the label's address in
 *   immediate = the label to search for
 *
-* Note: unlike every other assembly, this is a runtime function: time is spent scanning the program to find the label. Cluster these instructions near the beginning of a program, where they will not be executed repeatedly.
+* Note: unlike every other assembly, this is a runtime function: time is spent scanning the program to find the label.
+* Cluster these instructions near the beginning of a program, where they will not be executed repeatedly.
 *
-* Note: searches forward from this instruction first, then backward, so the closest following label wins any ambiguity. Without known program bounds it scans `mizu.config.maximumLabelSearch` instructions each way.
+* Note: searches forward from this instruction first, then backward, so the closest following label wins any ambiguity.
+* Without known program bounds it scans `mizu.config.maximumLabelSearch` instructions each way.
 *
 * Examples:
 * ---
@@ -101,6 +103,7 @@ void* label(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* findLabel(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	auto programStart = calculateProgramStart(*env, pc);
 	auto programEnd_ = calculateProgramEnd(*env, pc);
 	immutable needle = immediate(*pc);
@@ -166,6 +169,7 @@ void* halt(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* debugPrint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	auto value = &registers[pc.a];
 	char* text = null;
 	immutable built = fp.string.append(text, "u64 = ", *value, ", i64 = ", *cast(long*) value, ", f64 = ", *cast(double*) value, ", f32 = ", *cast(float*) value, '\n');
@@ -196,6 +200,7 @@ void* debugPrint(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* debugPrintBinary(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	auto bytes = cast(const(ubyte)*)&registers[pc.a];
 
 	char[8 * ulong.sizeof] bits;
@@ -230,6 +235,7 @@ void* debugPrintBinary(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* loadImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = immediate(*pc);
 	mixin(nextInstruction);
 }
@@ -257,6 +263,7 @@ void* loadImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* loadUpperImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] |= cast(ulong) immediate(*pc) << 32;
 	mixin(nextInstruction);
 }
@@ -282,6 +289,7 @@ void* loadUpperImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* convertToU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -307,6 +315,7 @@ void* convertToU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* convertToU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	*cast(uint*)&registers[pc.out_] = cast(uint) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -332,6 +341,7 @@ void* convertToU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* convertToU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	*cast(ushort*)&registers[pc.out_] = cast(ushort) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -357,6 +367,7 @@ void* convertToU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	*cast(ubyte*)&registers[pc.out_] = cast(ubyte) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -383,6 +394,7 @@ void* convertToU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ulong*) stackAddress(env, sp, registers[pc.a], ulong.sizeof);
 	mixin(nextInstruction);
 }
@@ -410,6 +422,7 @@ void* stackLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ulong*) stackAddress(env, sp, registers[pc.b], ulong.sizeof) = registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -436,6 +449,7 @@ void* stackStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(uint*) stackAddress(env, sp, registers[pc.a], uint.sizeof);
 	mixin(nextInstruction);
 }
@@ -463,6 +477,7 @@ void* stackLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(uint*) stackAddress(env, sp, registers[pc.b], uint.sizeof) = cast(uint) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -489,6 +504,7 @@ void* stackStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ushort*) stackAddress(env, sp, registers[pc.a], ushort.sizeof);
 	mixin(nextInstruction);
 }
@@ -516,6 +532,7 @@ void* stackLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ushort*) stackAddress(env, sp, registers[pc.b], ushort.sizeof) = cast(ushort) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -542,6 +559,7 @@ void* stackStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *stackAddress(env, sp, registers[pc.a], ubyte.sizeof);
 	mixin(nextInstruction);
 }
@@ -569,6 +587,7 @@ void* stackLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *stackAddress(env, sp, registers[pc.b], ubyte.sizeof) = cast(ubyte) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -595,6 +614,7 @@ void* stackStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* stackPush(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	sp -= registers[pc.a];
 	assert(onStack(env, sp, 0), "mizu: stack overflow");
 	mixin(nextInstruction);
@@ -649,6 +669,7 @@ void* stackPushImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* stackPop(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	sp += registers[pc.a];
 	assert(onStack(env, sp, 0), "mizu: stack underflow");
 	mixin(nextInstruction);
@@ -703,6 +724,7 @@ void* stackPopImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* offsetOfStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable offset = *cast(long*)&registers[pc.a];
 	auto bottom = env.stackBottom - offset;
 	assert(onStack(env, bottom, 0), "mizu: offset is not on the stack");
@@ -711,7 +733,8 @@ void* offsetOfStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 }
 
 /**
-* Moves the program counter by an offset. Zero re-executes this instruction, one continues as usual, and a negative offset jumps backward.
+* Moves the program counter by an offset.
+* Zero re-executes this instruction, one continues as usual, and a negative offset jumps backward.
 *
 * Params:
 *   out_ = register to store the address of the instruction that would have run next in
@@ -734,6 +757,7 @@ void* offsetOfStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 * ---
 */
 void* jumpRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc += offset - 1;
@@ -741,7 +765,8 @@ void* jumpRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 }
 
 /**
-* Moves the program counter by an offset. Zero re-executes this instruction, one continues as usual, and a negative offset jumps backward.
+* Moves the program counter by an offset.
+* Zero re-executes this instruction, one continues as usual, and a negative offset jumps backward.
 *
 * Params:
 *   out_ = register to store the address of the instruction that would have run next in
@@ -761,6 +786,7 @@ void* jumpRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* jumpRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc += immediateSigned(*pc) - 1;
 	mixin(nextInstruction);
@@ -789,6 +815,7 @@ void* jumpRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* jumpTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	auto target = cast(Opcode*) registers[pc.a];
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	pc = target - 1;
@@ -820,6 +847,7 @@ void* jumpTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* branchRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	immutable condition = registers[pc.a];
 	immutable offset = *cast(long*)&registers[pc.b];
 	registers[pc.out_] = cast(ulong)(pc + 1);
@@ -851,6 +879,7 @@ void* branchRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* branchRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable condition = registers[pc.a];
 	registers[pc.out_] = cast(ulong)(pc + 1);
 	if (condition)
@@ -883,6 +912,7 @@ void* branchRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* e
 * ---
 */
 void* branchTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	immutable condition = registers[pc.a];
 	auto target = cast(Opcode*) registers[pc.b];
 	registers[pc.out_] = cast(ulong)(pc + 1);
@@ -916,6 +946,7 @@ void* branchTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 * ---
 */
 void* setIfEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] == registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -945,6 +976,7 @@ void* setIfEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* setIfNotEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] != registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -974,6 +1006,7 @@ void* setIfNotEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* setIfLess(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] < registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1001,6 +1034,7 @@ void* setIfLess(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* setIfLessSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(long*)&registers[pc.a] < *cast(long*)&registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1029,6 +1063,7 @@ void* setIfLessSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* setIfGreaterEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] >= registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1055,6 +1090,7 @@ void* setIfGreaterEqual(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* setIfGreaterEqualSigned(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(long*)&registers[pc.a] >= *cast(long*)&registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1082,6 +1118,7 @@ void* setIfGreaterEqualSigned(Opcode* pc, ulong* registers, RegistersAndStack* e
 * ---
 */
 void* add(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] + registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1109,6 +1146,7 @@ void* add(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* subtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] - registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1136,6 +1174,7 @@ void* subtract(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 * ---
 */
 void* multiply(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] * registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1163,6 +1202,8 @@ void* multiply(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 * ---
 */
 void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
+	assert(registers[pc.b] != 0, "mizu.divide: a zero divisor, which the instruction does not define");
 	registers[pc.out_] = registers[pc.a] / registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1190,6 +1231,8 @@ void* divide(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* remainder(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
+	assert(registers[pc.b] != 0, "mizu.remainder: a zero divisor, which the instruction does not define");
 	registers[pc.out_] = registers[pc.a] % registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1217,6 +1260,7 @@ void* remainder(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* shiftLeft(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] << registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1244,6 +1288,7 @@ void* shiftLeft(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* shiftRightLogical(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] >> registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1271,6 +1316,7 @@ void* shiftRightLogical(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* shiftRightArithmetic(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(long*)&registers[pc.a] >> registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1298,6 +1344,7 @@ void* shiftRightArithmetic(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* bitwiseXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] ^ registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1325,6 +1372,7 @@ void* bitwiseXor(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* bitwiseAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] & registers[pc.b];
 	mixin(nextInstruction);
 }
@@ -1352,6 +1400,7 @@ void* bitwiseAnd(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* bitwiseOr(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = registers[pc.a] | registers[pc.b];
 	mixin(nextInstruction);
 }

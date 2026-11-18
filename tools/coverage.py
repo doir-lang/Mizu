@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Measures per-module unittest coverage. Set DC to use a compiler other than ldc2.
+"""Measures per-module unittest coverage.
+Set DC to use a compiler other than ldc2.
 
 Usage: tools/coverage.py [-v]    (-v lists the uncovered lines)
 """

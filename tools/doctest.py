@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Compiles and runs every DDoc `---` example under -betterC, and reports public definitions missing documentation or an example. Set DC to use a compiler other than ldc2.
+"""Compiles and runs every DDoc `---` example under -betterC, and reports public definitions missing documentation or an example.
+Set DC to use a compiler other than ldc2.
 
 Usage: tools/doctest.py
 """
@@ -61,14 +62,14 @@ def ddoc_blocks(lines):
 			i += 1
 
 
-def is_function(decl):
-	"""Whether the declaration `decl` starts a function or function template, which must have an example."""
-	if decl.startswith(('struct', 'enum', 'alias', 'module', 'package struct', 'package enum')):
-		return decl.startswith('struct') and '(' in decl.split('{')[0]
-	if '=' in decl.split('(')[0]:
+def is_function(declaration):
+	"""Whether the declaration `declaration` starts a function or function template, which must have an example."""
+	if declaration.startswith(('struct', 'enum', 'alias', 'module', 'package struct', 'package enum')):
+		return declaration.startswith('struct') and '(' in declaration.split('{')[0]
+	if '=' in declaration.split('(')[0]:
 		return False
-	return decl.startswith(('mixin template', 'pragma(inline')) or bool(
-		re.match(r'(package\s+|extern\s*\(C\)\s*)?[\w!().\[\]* ]+?\s+\w+(\([^)]*\))?\(', decl))
+	return declaration.startswith(('mixin template', 'pragma(inline')) or bool(
+		re.match(r'(package\s+|extern\s*\(C\)\s*)?[\w!().\[\]* ]+?\s+\w+(\([^)]*\))?\(', declaration))
 
 
 def check(path, lines, problems, examples):
@@ -79,7 +80,7 @@ def check(path, lines, problems, examples):
 		while j < len(lines) and not lines[j].strip():
 			j += 1
 		documented.add(j)
-		decl = strip_conditions(lines[j].strip()) if j < len(lines) else ''
+		declaration = strip_conditions(lines[j].strip()) if j < len(lines) else ''
 		k = j
 		while k < len(lines) and lines[k].strip().startswith('pragma('):
 			k += 1
@@ -96,10 +97,10 @@ def check(path, lines, problems, examples):
 			elif code is not None:
 				code[1].append(text)
 		ditto = any(t.strip().lower().startswith('ditto') for _, t in body)
-		if is_function(decl) and not found and not ditto:
-			problems.append(f'{path}:{j + 1}: documented without an example: {decl}')
+		if is_function(declaration) and not found and not ditto:
+			problems.append(f'{path}:{j + 1}: documented without an example: {declaration}')
 		# Module documentation sketches configuration and user code, which need not compile on its own.
-		if not decl.startswith('module'):
+		if not declaration.startswith('module'):
 			examples += found
 
 	# Flags top-level declarations with no DDoc directly above; conditional blocks do not count as nesting.

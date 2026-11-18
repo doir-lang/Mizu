@@ -1,7 +1,9 @@
 /**
 * The FFI backend for targets without libffi, WebAssembly above all: a trampoline generated at compile time for every signature of up to `mizu.config.maximumTrampolineArguments` arguments, each calling through a function pointer cast to that signature.
 *
-* A call only depends on how each value is passed, so the eight Mizu types collapse to four argument classes (32 and 64 bit integers, `float`, `double`) and six return classes (which also keep `void` and the sign of a 32 bit result), and a pointer joins whichever integer class `size_t` does. That keeps the table to `6 * (1 + 4 + ... + 4^max)` entries. On wasm a function pointer is a table index and the call is a `call_indirect`, which traps rather than misbehaves if the signature is wrong.
+* A call only depends on how each value is passed, so the eight Mizu types collapse to four argument classes (32 and 64 bit integers, `float`, `double`) and six return classes (which also keep `void` and the sign of a 32 bit result), and a pointer joins whichever integer class `size_t` does.
+* That keeps the table to `6 * (1 + 4 + ... + 4^max)` entries.
+* On wasm a function pointer is a table index and the call is a `call_indirect`, which traps rather than misbehaves if the signature is wrong.
 */
 module mizu.ffi.trampoline;
 
@@ -55,15 +57,19 @@ private int returnClass(Kind kind) {
 
 // Where the trampolines taking `arguments` arguments start in the table: every shorter signature comes first.
 private size_t blockStart(size_t arguments) {
+	assert(arguments <= mizu.config.maximumTrampolineArguments + 1, "mizu.ffi: a block past the trampoline table");
 	size_t start = 0, signatures = returnTypes.length;
 	foreach (_; 0 .. arguments) {
 		start += signatures;
 		signatures *= argumentTypes.length;
 	}
+	assert(arguments == 0 || start >= returnTypes.length, "mizu.ffi: a block that overlaps the one before");
 	return start;
 }
 
 private void trampoline(R, A...)(const(void)* func, const(ulong)* arguments, ulong* result) {
+	assert(func !is null, "mizu.ffi: calling no function");
+	assert(arguments !is null || A.length == 0, "mizu.ffi: arguments to read from nowhere");
 	alias Function = extern(C) R function(A) @nogc nothrow;
 	A values;
 	static foreach (i, T; A)
@@ -131,11 +137,13 @@ Trampoline find(scope const(Kind)[] kinds) {
 		if (class_ < 0) return null;
 		code = code * argumentTypes.length + class_;
 	}
+	assert(blockStart(arguments) + code < blockStart(arguments + 1), "mizu.ffi: a signature's trampoline past its block");
+	assert(trampolines[blockStart(arguments) + code] !is null, "mizu.ffi: a table entry with no trampoline");
 	return trampolines[blockStart(arguments) + code];
 }
 
 unittest {
-	// Every return class and argument class reaches its function through the trampoline `find` picks: void, a sign-extended int, unsigned and 64 bit integers, both floats, and pointers.
+	// Return and argument classes reach their function through the trampoline `find` picks: void, sign-extended int, unsigned and 64-bit integers, both floats, and pointers.
 	static __gshared uint sunk;
 	static extern(C) void sink(uint x) @nogc nothrow { sunk = x; }
 	static extern(C) int negate(int x) @nogc nothrow { return -x; }

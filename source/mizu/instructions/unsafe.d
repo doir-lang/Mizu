@@ -1,7 +1,8 @@
 /**
 * Instructions that reach outside Mizu's sandbox: host heap allocation, raw pointers into the VM's own memory, and unchecked `memcpy`/`memset`.
 *
-* Nothing here is validated. A Mizu program that gets one of these wrong can corrupt the host process.
+* Nothing here is validated.
+* A Mizu program that gets one of these wrong can corrupt the host process.
 */
 module mizu.instructions.unsafe;
 
@@ -49,6 +50,7 @@ extern(C):
 * ---
 */
 void* allocate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = cast(size_t) fp.pointer.allocator(null, hostSize(registers[pc.a]));
 	mixin(nextInstruction);
 }
@@ -75,6 +77,7 @@ void* allocate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) 
 * ---
 */
 void* freeAllocated(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	cast(void) fp.pointer.allocator(cast(void*) registers[pc.a], 0);
 	registers[pc.a] = registers[pc.b];
 	mixin(nextInstruction);
@@ -106,6 +109,7 @@ void* freeAllocated(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* allocateFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	bool overflow;
 	immutable bytes = core.checkedint.mulu(registers[pc.a], registers[pc.b], overflow);
 	registers[pc.out_] = overflow ? 0 : cast(size_t) fp.pointer.allocate!ubyte(hostSize(bytes));
@@ -134,6 +138,7 @@ void* allocateFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* freeFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	fp.pointer.free(cast(const(ubyte)*) registers[pc.a]);
 	registers[pc.a] = registers[pc.b];
 	mixin(nextInstruction);
@@ -160,6 +165,7 @@ void* freeFatPointer(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* pointerToStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(size_t)(sp + offset);
 	mixin(nextInstruction);
@@ -186,6 +192,7 @@ void* pointerToStack(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* pointerToStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable offset = *cast(long*)&registers[pc.a];
 	registers[pc.out_] = cast(size_t)(env.stackBottom - offset);
 	mixin(nextInstruction);
@@ -211,6 +218,7 @@ void* pointerToStackBottom(Opcode* pc, ulong* registers, RegistersAndStack* env,
 * ---
 */
 void* pointerToRegister(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = cast(size_t)(registers + pc.a);
 	mixin(nextInstruction);
 }
@@ -240,7 +248,10 @@ void* pointerToRegister(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* copyMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
-	fp.pointer.copy((cast(ubyte*) registers[pc.out_])[0 .. cast(size_t) registers[pc.b]], (cast(const(ubyte)*) registers[pc.a])[0 .. cast(size_t) registers[pc.b]]);
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
+	immutable size_t n = cast(size_t) registers[pc.b];
+	assert(registers[pc.out_] + n <= registers[pc.a] || registers[pc.a] + n <= registers[pc.out_], "mizu.copyMemory: overlapping source and destination");
+	fp.pointer.copy((cast(ubyte*) registers[pc.out_])[0 .. n], (cast(const(ubyte)*) registers[pc.a])[0 .. n]);
 	mixin(nextInstruction);
 }
 
@@ -268,6 +279,8 @@ void* copyMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* copyMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
+	assert(registers[pc.out_] + pc.b <= registers[pc.a] || registers[pc.a] + pc.b <= registers[pc.out_], "mizu.copyMemoryImmediate: overlapping source and destination");
 	fp.pointer.copy((cast(ubyte*) registers[pc.out_])[0 .. pc.b], (cast(const(ubyte)*) registers[pc.a])[0 .. pc.b]);
 	mixin(nextInstruction);
 }
@@ -296,6 +309,7 @@ void* copyMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, 
 * ---
 */
 void* setMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	fp.pointer.fill((cast(ubyte*) registers[pc.out_])[0 .. cast(size_t) registers[pc.b]], cast(ubyte) registers[pc.a]);
 	mixin(nextInstruction);
 }
@@ -323,6 +337,7 @@ void* setMemory(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* setMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	fp.pointer.fill((cast(ubyte*) registers[pc.out_])[0 .. pc.b], cast(ubyte) registers[pc.a]);
 	mixin(nextInstruction);
 }
@@ -348,6 +363,7 @@ void* setMemoryImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, u
 * ---
 */
 void* printString(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable printed = fp.io.writeAll(fp.io.Console.output, fp.string.sliceTerminated(cast(const(char)*) registers[pc.a])) && fp.io.writeAll(fp.io.Console.output, "\n");
 	registers[pc.out_] = printed ? 0 : -1;
 	mixin(nextInstruction);
@@ -356,7 +372,8 @@ void* printString(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 /**
 * Loads a 64 bit integer from the memory a register points at.
 *
-* This family is `mizu.instructions.core`'s stack loads and stores with `sp + offset` replaced by an address register, unchecked, since the address may be a host allocation as well as somewhere on the stack. Unlike `copyMemory`, `out_` stays a genuine output, so a compiler that binds `out_` to a call's destination can still dereference a pointer.
+* This family is `mizu.instructions.core`'s stack loads and stores with `sp + offset` replaced by an address register, unchecked, since the address may be a host allocation as well as somewhere on the stack.
+* Unlike `copyMemory`, `out_` stays a genuine output, so a compiler that binds `out_` to a call's destination can still dereference a pointer.
 *
 * Params:
 *   out_ = register to store the value in
@@ -377,6 +394,7 @@ void* printString(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* pointerLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ulong*) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -404,6 +422,7 @@ void* pointerLoadU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* pointerStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ulong*) registers[pc.b] = registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -430,6 +449,7 @@ void* pointerStoreU64(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* pointerLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(uint*) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -457,6 +477,7 @@ void* pointerLoadU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* pointerStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(uint*) registers[pc.b] = cast(uint) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -483,6 +504,7 @@ void* pointerStoreU32(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* pointerLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ushort*) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -510,6 +532,7 @@ void* pointerLoadU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* pointerStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ushort*) registers[pc.b] = cast(ushort) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -536,6 +559,7 @@ void* pointerStoreU16(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyt
 * ---
 */
 void* pointerLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ubyte*) registers[pc.a];
 	mixin(nextInstruction);
 }
@@ -563,6 +587,7 @@ void* pointerLoadU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* pointerStoreU8(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a", "b")(*pc), "mizu: a register index past registerCount");
 	registers[pc.out_] = *cast(ubyte*) registers[pc.b] = cast(ubyte) registers[pc.a];
 	mixin(nextInstruction);
 }

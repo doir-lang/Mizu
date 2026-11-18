@@ -9,7 +9,8 @@ static import fp.io;
 
 // wrapper: Mizu's one spelling of an unrecoverable VM error, so every report reads `mizu: fatal: …`
 /**
-* Reports an unrecoverable VM error on stderr and aborts the process, through `fp.io.abort`. The message is slices, characters and integers, such as a detail appended to the text.
+* Reports an unrecoverable VM error on stderr and aborts the process, through `fp.io.abort`.
+* The message is slices, characters and integers, such as a detail appended to the text.
 *
 * Examples:
 * ---

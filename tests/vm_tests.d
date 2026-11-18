@@ -119,6 +119,14 @@ unittest {
 	];
 	RegistersAndStack empty;
 	static if (fp.testing.catchesAborts) assert(aborts({ run(overflow[], empty); }));
+
+	// A register index past `registerCount` would reach the stack, which shares the registers' memory, so it aborts too.
+	static immutable Opcode[2] stray = [
+		Opcode(&add, cast(Register) registerCount, Registers.t(0), Registers.t(1)),
+		Opcode(&halt),
+	];
+	RegistersAndStack strayed;
+	static if (fp.testing.catchesAborts) assert(aborts({ run(stray[], strayed); }));
 }
 
 unittest {
@@ -697,7 +705,8 @@ unittest {
 }
 
 unittest {
-	// The three unconditional/conditional relative jumps. `t0` stays zero because every instruction that would change it is jumped over.
+	// The three unconditional/conditional relative jumps.
+	// `t0` stays zero because every instruction that would change it is jumped over.
 	static immutable Opcode[19] program = [
 		/*  0 */ Opcode(&loadImmediate, Registers.t(0)).setImmediate(0),
 		/*  1 */ Opcode(&loadImmediate, Registers.t(1)).setImmediate(3),
@@ -1050,7 +1059,8 @@ unittest {
 }
 
 unittest {
-	// The blocking (rather than "try") mutex locks. Nothing else holds this mutex, so each lock is taken immediately.
+	// The blocking (rather than "try") mutex locks.
+	// Nothing else holds this mutex, so each lock is taken immediately.
 	static immutable Opcode[7] program = [
 		Opcode(&mutexCreate, Registers.t(0)),
 		Opcode(&mutexWriteLock, 0, Registers.t(0)),

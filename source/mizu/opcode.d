@@ -108,7 +108,8 @@ alias Instruction = extern(C) void* function(Opcode* pc, ulong* registers, Regis
 *
 * Note: since `Instruction` is a pointer this struct has different sizes on different machines, so Mizu binaries are only compatible with machines of the same pointer size and endianness.
 *
-* The immediate accessors pack a 32 bit value into the `a`/`b` register fields as `a = low half, b = high half`. Writing the halves explicitly, rather than reinterpreting the pair as one `uint`, lets them constant-fold and keeps the packing independent of host endianness, so whole programs can live in read-only data.
+* The immediate accessors pack a 32 bit value into the `a`/`b` register fields as `a = low half, b = high half`.
+* Writing the halves explicitly, rather than reinterpreting the pair as one `uint`, lets them constant-fold and keeps the packing independent of host endianness, so whole programs can live in read-only data.
 */
 struct Opcode {
 	/// Instruction to perform.
@@ -141,8 +142,10 @@ uint immediate(const Opcode code) { return code.a | (cast(uint) code.b << 16); }
 * ---
 */
 Opcode setImmediate(Opcode code, uint value) {
+	static assert(Register.sizeof * 2 == uint.sizeof, "mizu: an immediate is two registers wide");
 	code.a = cast(Register)(value & 0xFFFF);
 	code.b = cast(Register)(value >> 16);
+	assert(immediate(code) == value, "mizu: an immediate that does not read back");
 	return code;
 }
 
@@ -189,7 +192,9 @@ short branchImmediate(const Opcode code) { return cast(short) code.b; }
 * ---
 */
 Opcode setBranchImmediate(Opcode code, short value) {
+	immutable kept = code.a;
 	code.b = cast(Register) value;
+	assert(branchImmediate(code) == value && code.a == kept, "mizu: a branch offset that does not read back, or that moved the register");
 	return code;
 }
 
@@ -202,6 +207,7 @@ Opcode setBranchImmediate(Opcode code, short value) {
 * ---
 */
 float immediateF32(const Opcode code) {
+	static assert(float.sizeof == uint.sizeof, "mizu: a float immediate is an immediate's width");
 	immutable bits = immediate(code);
 	return *cast(const float*) &bits;
 }
@@ -229,7 +235,9 @@ Opcode setImmediateF32(Opcode code, float value) { return setImmediate(code, *ca
 * ---
 */
 Opcode setLowerImmediateF64(Opcode code, double value) {
-	return setImmediate(code, cast(uint)(*cast(ulong*) &value));
+	auto set = setImmediate(code, cast(uint)(*cast(ulong*) &value));
+	assert(immediate(set) == cast(uint)(*cast(ulong*) &value), "mizu: the low half of a double that does not read back");
+	return set;
 }
 
 /**
@@ -241,7 +249,9 @@ Opcode setLowerImmediateF64(Opcode code, double value) {
 * ---
 */
 Opcode setUpperImmediateF64(Opcode code, double value) {
-	return setImmediate(code, cast(uint)((*cast(ulong*) &value) >> 32));
+	auto set = setImmediate(code, cast(uint)((*cast(ulong*) &value) >> 32));
+	assert(immediate(set) == cast(uint)((*cast(ulong*) &value) >> 32), "mizu: the high half of a double that does not read back");
+	return set;
 }
 
 // wrapper: an instruction, or an accessor of the packed encoding the instruction set defines
@@ -256,7 +266,9 @@ Opcode setUpperImmediateF64(Opcode code, double value) {
 * ---
 */
 Opcode setHostPointerLowerImmediate(Opcode code, const(void)* ptr) {
-	return setImmediate(code, cast(uint) cast(size_t) ptr);
+	auto set = setImmediate(code, cast(uint) cast(size_t) ptr);
+	assert(immediate(set) == cast(uint) cast(size_t) ptr, "mizu: the low half of a pointer that does not read back");
+	return set;
 }
 
 /**
@@ -270,9 +282,11 @@ Opcode setHostPointerLowerImmediate(Opcode code, const(void)* ptr) {
 * ---
 */
 Opcode setHostPointerUpperImmediate(Opcode code, const(void)* ptr) {
-	static if (size_t.sizeof > uint.sizeof)
-		return setImmediate(code, cast(uint)((cast(size_t) ptr) >> 32));
-	else
+	static if (size_t.sizeof > uint.sizeof) {
+		auto set = setImmediate(code, cast(uint)((cast(size_t) ptr) >> 32));
+		assert(((cast(ulong) immediate(set) << 32) | (cast(size_t) ptr & uint.max)) == cast(size_t) ptr, "mizu: a pointer that does not reassemble from its halves");
+		return set;
+	} else
 		return setImmediate(code, 0);
 }
 
@@ -322,6 +336,7 @@ struct RegistersAndStack {
 * ---
 */
 const(Opcode)* calculateProgramStart(ref const RegistersAndStack env, const(Opcode)* pc) {
+	assert(env.programStart is null || (pc >= env.programStart && (env.programEnd is null || pc < env.programEnd)), "mizu: an instruction outside its program");
 	return env.programStart ? env.programStart : pc - mizu.config.maximumLabelSearch;
 }
 
@@ -337,6 +352,7 @@ const(Opcode)* calculateProgramStart(ref const RegistersAndStack env, const(Opco
 * ---
 */
 const(Opcode)* calculateProgramEnd(ref const RegistersAndStack env, const(Opcode)* pc) {
+	assert(env.programEnd is null || (pc < env.programEnd && (env.programStart is null || pc >= env.programStart)), "mizu: an instruction outside its program");
 	return env.programEnd ? env.programEnd : pc + mizu.config.maximumLabelSearch;
 }
 
@@ -357,11 +373,30 @@ const(Opcode)* calculateProgramEnd(ref const RegistersAndStack env, const(Opcode
 * ---
 */
 void setupEnvironment(ref RegistersAndStack env, const(Opcode)* programStart = null, const(Opcode)* programEnd = null) @trusted {
+	assert(programStart is null || programEnd is null || programStart <= programEnd, "mizu: a program that ends before it starts");
 	env.memory[0] = 0;
 	env.stackBoundary = cast(ubyte*)(env.memory.ptr + registerCount);
 	env.stackBottom = cast(ubyte*)(env.memory.ptr + memorySize);
 	env.programStart = programStart;
 	env.programEnd = programEnd;
+	assert(configured(env) && env.stackBottom - env.stackBoundary == stackSizeBytes);
+}
+
+/**
+* Whether `env` was configured by `setupEnvironment` and has not moved since: its stack bounds point into its own memory, after the registers.
+* A copied environment's bounds still point into the original, so running it would corrupt that one.
+*
+* Examples:
+* ---
+* RegistersAndStack env;
+* assert(!configured(env));
+* setupEnvironment(env);
+* assert(configured(env));
+* ---
+*/
+bool configured(ref const RegistersAndStack env) @trusted {
+	assert(env.programStart is null || env.programEnd is null || env.programStart <= env.programEnd, "mizu: an environment whose program ends before it starts");
+	return env.stackBoundary is cast(const(ubyte)*)(env.memory.ptr + registerCount) && env.stackBottom is cast(const(ubyte)*)(env.memory.ptr + memorySize);
 }
 
 /**
@@ -377,7 +412,9 @@ void setupEnvironment(ref RegistersAndStack env, const(Opcode)* programStart = n
 * ---
 */
 void setupEnvironment(ref RegistersAndStack env, const(Opcode)[] program) @trusted {
+	assert(program.ptr !is null || program.length == 0, "mizu: a program with a length but no instructions");
 	setupEnvironment(env, program.ptr, program.ptr + program.length);
+	assert(env.programEnd - env.programStart == program.length, "mizu: an environment set up for a different program");
 }
 
 /**
@@ -402,6 +439,24 @@ void fillStackBottom(ref RegistersAndStack env, const(void)[] binary) @trusted {
 	assert(binary.length <= memorySizeBytes, "mizu: data does not fit in memory");
 	auto end = cast(ubyte*)(env.memory.ptr + memorySize);
 	fp.pointer.copy((end - binary.length)[0 .. binary.length], cast(const(ubyte)[]) binary);
+	assert(binary.length == 0 || (end - binary.length)[0] == (cast(const(ubyte)[]) binary)[0], "mizu: data not copied to the stack's bottom");
+}
+
+/**
+* Whether each of `fields` of `code`, the fields an instruction reads or writes as registers, names one below `registerCount`; every other index would reach the stack, which shares the registers' memory.
+* Each instruction asserts it of its own register fields.
+*
+* Examples:
+* ---
+* assert(registersValid!("out_", "a")(Opcode(null, Registers.t(0), Registers.a(0))));
+* assert(!registersValid!("b")(Opcode(null, 0, 0, cast(Register) registerCount)));
+* ---
+*/
+bool registersValid(fields...)(const Opcode code) {
+	static assert(fields.length > 0, "mizu: checking no registers");
+	static foreach (field; fields)
+		if (__traits(getMember, code, field) >= registerCount) return false;
+	return true;
 }
 
 /**
@@ -421,7 +476,8 @@ void trace(scope const(char)[] name, const(Opcode)* pc) @trusted {
 }
 
 /**
-* Executes the next instruction. Mix this in at the end of every instruction: `mixin(nextInstruction);`
+* Executes the next instruction.
+* Mix this in at the end of every instruction: `mixin(nextInstruction);`
 *
 * It is a mixin rather than a function because the dispatch must be a tail call made by the instruction itself; see the tail call notes in the README.
 *
@@ -440,6 +496,7 @@ enum string nextInstruction = mizu.config.noHardwareThreads
 	? q{
 		{
 			mizu.opcode.trace(__FUNCTION__, pc);
+			assert(sp >= env.stackBoundary && sp <= env.stackBottom, "mizu: the stack pointer left the stack");
 			registers[0] = 0;
 			return mizu.opcode.Coroutine.next(pc, registers, env, sp);
 		}
@@ -447,6 +504,7 @@ enum string nextInstruction = mizu.config.noHardwareThreads
 	: q{
 		{
 			mizu.opcode.trace(__FUNCTION__, pc);
+			assert(sp >= env.stackBoundary && sp <= env.stackBottom, "mizu: the stack pointer left the stack");
 			registers[0] = 0;
 			++pc;
 			return pc.op(pc, registers, env, sp);
@@ -473,6 +531,7 @@ static if (!mizu.config.noHardwareThreads) {
 	* ---
 	*/
 	void* startFromEnvironment(const(Opcode)* program, ref RegistersAndStack env) @trusted {
+		assert(program !is null && configured(env), "mizu: running in an environment setupEnvironment did not configure");
 		auto pc = cast(Opcode*) program;
 		return pc.op(pc, env.memory.ptr, &env, env.stackBottom);
 	}
@@ -645,7 +704,7 @@ static if (!mizu.config.noHardwareThreads) {
 		* ---
 		*/
 		void start(Opcode* programCounter, RegistersAndStack* environment) @trusted {
-			assert(programCounter && environment);
+			assert(programCounter && environment && configured(*environment), "mizu: running in an environment setupEnvironment did not configure");
 			if (!fp.dynarray.pushBack(contexts, ExecutionContext(programCounter - 1, environment.stackBottom, environment)))
 				mizu.error.fatal("Failed to allocate an execution context.");
 		}

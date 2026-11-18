@@ -5,7 +5,8 @@
 *
 * $(UL
 *   $(LI By default, real OS threads, channels and read/write mutexes from $(LINK2 https://github.com/doir-lang/bc-threads, bc-threads).)
-*   $(LI With the `MizuNoHardwareThreads` version set (implied on WASM), `mizu.opcode.Coroutine`'s round-robin scheduler. There is only one real thread, so anything that would block instead rewinds the program counter by one and yields: the instruction simply runs again next time its context is scheduled.))
+*   $(LI With the `MizuNoHardwareThreads` version set (implied on WASM), `mizu.opcode.Coroutine`'s round-robin scheduler.
+*   There is only one real thread, so anything that would block instead rewinds the program counter by one and yields: the instruction simply runs again next time its context is scheduled.))
 */
 module mizu.instructions.parallel;
 
@@ -119,9 +120,11 @@ private bool delay(ulong microseconds, ref Opcode* pc, ref ulong storageRegister
 extern(C):
 
 /**
-* Forks a new thread whose program counter starts at an offset relative to this instruction. Zero starts it at this instruction, one at the next, and a negative offset at a previous one.
+* Forks a new thread whose program counter starts at an offset relative to this instruction.
+* Zero starts it at this instruction, one at the next, and a negative offset at a previous one.
 *
-* The new thread gets its own copy of the current registers and stack. Failing to start it is fatal.
+* The new thread gets its own copy of the current registers and stack.
+* Failing to start it is fatal.
 *
 * Params:
 *   out_ = register to store the thread reference in, for `joinThread`
@@ -150,13 +153,15 @@ extern(C):
 * ---
 */
 void* forkRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	auto threadPC = pc + *cast(long*)&registers[pc.a];
 	registers[pc.out_] = newThread(threadPC, env, sp);
 	mixin(nextInstruction);
 }
 
 /**
-* Forks a new thread whose program counter starts at an offset relative to this instruction, getting its own copy of the current registers and stack. Failing to start it is fatal.
+* Forks a new thread whose program counter starts at an offset relative to this instruction, getting its own copy of the current registers and stack.
+* Failing to start it is fatal.
 *
 * Params:
 *   out_ = register to store the thread reference in, for `joinThread`
@@ -177,13 +182,15 @@ void* forkRelative(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* forkRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	auto threadPC = pc + immediateSigned(*pc);
 	registers[pc.out_] = newThread(threadPC, env, sp);
 	mixin(nextInstruction);
 }
 
 /**
-* Forks a new thread with its program counter set to a value, usually the output of a `findLabel`, getting its own copy of the current registers and stack. Failing to start it is fatal.
+* Forks a new thread with its program counter set to a value, usually the output of a `findLabel`, getting its own copy of the current registers and stack.
+* Failing to start it is fatal.
 *
 * Params:
 *   out_ = register to store the thread reference in, for `joinThread`
@@ -206,13 +213,15 @@ void* forkRelativeImmediate(Opcode* pc, ulong* registers, RegistersAndStack* env
 * ---
 */
 void* forkTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	auto threadPC = cast(Opcode*) registers[pc.a];
 	registers[pc.out_] = newThread(threadPC, env, sp);
 	mixin(nextInstruction);
 }
 
 /**
-* Waits for the provided thread to finish and releases its reference. Joining zero, the main thread, does nothing.
+* Waits for the provided thread to finish and releases its reference.
+* Joining zero, the main thread, does nothing.
 *
 * With `MizuNoHardwareThreads`, an unfinished thread rewinds the program counter so this instruction runs again.
 *
@@ -235,6 +244,7 @@ void* forkTo(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
 * ---
 */
 void* joinThread(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads) {
 		auto thread = cast(bc.thread.Thread*) registers[pc.a];
 		if (thread !is null) {
@@ -274,13 +284,15 @@ void* joinThread(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp
 * ---
 */
 void* sleepMicroseconds(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	// A sleep the platform refused only ends early, which a program cannot tell from being descheduled late.
 	cast(void) delay(registers[pc.a], pc, registers[pc.out_]);
 	mixin(nextInstruction);
 }
 
 /**
-* Creates an inter-thread communication channel, which can buffer a number of values or just one. Failing to allocate it is fatal.
+* Creates an inter-thread communication channel, which can buffer a number of values or just one.
+* Failing to allocate it is fatal.
 *
 * Channels send and receive register-sized binary blobs.
 *
@@ -303,6 +315,7 @@ void* sleepMicroseconds(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	immutable requested = registers[pc.a] < 1 ? 1 : registers[pc.a];
 	if (requested > size_t.max) mizu.error.fatal("Failed to allocate a channel.");
 	immutable capacity = cast(size_t) requested;
@@ -334,6 +347,7 @@ void* channelCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* channelClose(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	auto channel = channelOf(registers[pc.a]);
 	bc.channel.close(channel);
 	bc.channel.free(channel);
@@ -365,6 +379,7 @@ void* channelClose(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* 
 * ---
 */
 void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads) {
 		auto received = bc.channel.receive(channelOf(registers[pc.a]));
 		registers[pc.out_] = received.isNull ? 0 : received.get;
@@ -377,7 +392,8 @@ void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 }
 
 /**
-* Blocks until the channel has room for a new value, then sends it; with `MizuNoHardwareThreads` it instead yields, rewinding the program counter, until there is room. A value sent to a closed channel is dropped.
+* Blocks until the channel has room for a new value, then sends it; with `MizuNoHardwareThreads` it instead yields, rewinding the program counter, until there is room.
+* A value sent to a closed channel is dropped.
 *
 * Params:
 *   a = register holding the channel to send to
@@ -400,6 +416,7 @@ void* channelReceive(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		cast(void) bc.channel.send(channelOf(registers[pc.a]), registers[pc.b]);
 	else {
@@ -412,12 +429,15 @@ void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 }
 
 /**
-* Creates a read/write lockable mutex. Failing to allocate it is fatal.
+* Creates a read/write lockable mutex.
+* Failing to allocate it is fatal.
 *
 * Params:
 *   out_ = register to store the mutex reference in
 *
-* Note: with `MizuNoHardwareThreads` there is no OS mutex; the register itself holds the lock state (0 unlocked, -1 write locked, n>0 read locked). Forking copies the registers, so each context holds its own lock rather than sharing one, and a contended blocking lock hangs. Use a channel to synchronise coroutine contexts.
+* Note: with `MizuNoHardwareThreads` there is no OS mutex; the register itself holds the lock state (0 unlocked, -1 write locked, n>0 read locked).
+* Forking copies the registers, so each context holds its own lock rather than sharing one, and a contended blocking lock hangs.
+* Use a channel to synchronise coroutine contexts.
 *
 * Examples:
 * ---
@@ -435,6 +455,7 @@ void* channelSend(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* mutexCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads) {
 		// A `pthread_rwlock_t` binds to the address it was initialised at, so the heap mutex `create` returns cannot be copied.
 		auto mutex = bc.mutex.create();
@@ -466,6 +487,7 @@ void* mutexCreate(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* s
 * ---
 */
 void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a", "b")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.free(mutexOf(registers[pc.a]));
 	registers[pc.a] = registers[pc.b];
@@ -495,6 +517,7 @@ void* mutexFree(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp)
 * ---
 */
 void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.lockForWriting(mutexOf(registers[pc.a]));
 	else {
@@ -530,6 +553,7 @@ void* mutexWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte
 * ---
 */
 void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		registers[pc.out_] = bc.mutex.tryLockForWriting(mutexOf(registers[pc.a]));
 	else {
@@ -565,6 +589,7 @@ void* mutexTryWriteLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ub
 * ---
 */
 void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.unlockForWriting(mutexOf(registers[pc.a]));
 	else {
@@ -599,6 +624,7 @@ void* mutexWriteUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.lockForReading(mutexOf(registers[pc.a]));
 	else {
@@ -632,6 +658,7 @@ void* mutexReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte*
 * ---
 */
 void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("out_", "a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		registers[pc.out_] = bc.mutex.tryLockForReading(mutexOf(registers[pc.a]));
 	else {
@@ -667,6 +694,7 @@ void* mutexTryReadLock(Opcode* pc, ulong* registers, RegistersAndStack* env, uby
 * ---
 */
 void* mutexReadUnlock(Opcode* pc, ulong* registers, RegistersAndStack* env, ubyte* sp) {
+	assert(mizu.opcode.registersValid!("a")(*pc), "mizu: a register index past registerCount");
 	static if (!mizu.config.noHardwareThreads)
 		bc.mutex.unlockForReading(mutexOf(registers[pc.a]));
 	else {
